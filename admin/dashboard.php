@@ -1,5 +1,5 @@
 <?php
-// admin/dashboard.php — Admin dashboard (filters + KPIs + rankings + distributions + trends) [enhanced]
+// admin/dashboard.php — Dashboard (export-before-HTML; DECIMAL scores; UI improved)
 
 declare(strict_types=1);
 
@@ -9,18 +9,27 @@ require_once __DIR__ . '/../inc/auth.php';
 session_start_secure();
 require_role('admin');
 
-$page_title = 'Dashboard';
-require __DIR__ . '/header.php';
+/**
+ * Null-safe escape wrapper (your h() is likely strict).
+ */
+function eh($v): string { return h((string)($v ?? '')); }
 
 /**
- * -----------------------------
- * Input helpers (strict)
- * -----------------------------
+ * Strict GET helpers
  */
 function gi(string $key, ?int $min = null, ?int $max = null): ?int {
     if (!isset($_GET[$key]) || $_GET[$key] === '') return null;
     if (!preg_match('/^\d+$/', (string)$_GET[$key])) return null;
     $v = (int)$_GET[$key];
+    if ($min !== null && $v < $min) return null;
+    if ($max !== null && $v > $max) return null;
+    return $v;
+}
+function gf(string $key, ?float $min = null, ?float $max = null): ?float {
+    if (!isset($_GET[$key]) || $_GET[$key] === '') return null;
+    $raw = str_replace(',', '.', trim((string)$_GET[$key]));
+    if (!preg_match('/^\d+(\.\d+)?$/', $raw)) return null;
+    $v = (float)$raw;
     if ($min !== null && $v < $min) return null;
     if ($max !== null && $v > $max) return null;
     return $v;
@@ -42,60 +51,8 @@ function gdate(string $key): ?string {
 }
 
 /**
- * Build WHERE clause for results-anchored queries.
- * Expects aliases: r=results, p=pupils, s=subjects, e=exams
+ * URL helper (preserve filters)
  */
-function build_filters(array $f): array {
-    $where = [];
-    $params = [];
-
-    if (!empty($f['academic_year'])) {
-        $where[] = 'e.academic_year = :academic_year';
-        $params['academic_year'] = $f['academic_year'];
-    }
-    if (!empty($f['exam_id'])) {
-        $where[] = 'e.id = :exam_id';
-        $params['exam_id'] = (int)$f['exam_id'];
-    }
-    if (!empty($f['subject_id'])) {
-        $where[] = 's.id = :subject_id';
-        $params['subject_id'] = (int)$f['subject_id'];
-    }
-    if (!empty($f['class_code'])) {
-        $where[] = 'p.class_code = :class_code';
-        $params['class_code'] = $f['class_code'];
-    }
-    if (!empty($f['track'])) {
-        $where[] = 'p.track = :track';
-        $params['track'] = $f['track'];
-    }
-    if (!empty($f['date_from'])) {
-        $where[] = 'e.exam_date >= :date_from';
-        $params['date_from'] = $f['date_from'];
-    }
-    if (!empty($f['date_to'])) {
-        $where[] = 'e.exam_date <= :date_to';
-        $params['date_to'] = $f['date_to'];
-    }
-
-    return [$where ? ('WHERE ' . implode(' AND ', $where)) : '', $params];
-}
-
-function fetch_all(PDO $pdo, string $sql, array $params = []): array {
-    $st = $pdo->prepare($sql);
-    foreach ($params as $k => $v) {
-        $type = is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR;
-        $st->bindValue(':' . $k, $v, $type);
-    }
-    $st->execute();
-    return $st->fetchAll(PDO::FETCH_ASSOC);
-}
-function fetch_one(PDO $pdo, string $sql, array $params = []): ?array {
-    $rows = fetch_all($pdo, $sql, $params);
-    return $rows[0] ?? null;
-}
-
-/** Preserve other filters in links */
 function url_with(array $overrides): string {
     $q = $_GET;
     foreach ($overrides as $k => $v) {
@@ -106,10 +63,103 @@ function url_with(array $overrides): string {
 }
 
 /**
- * CSV exporter (safe: same filter slice)
- * IMPORTANT: this must run BEFORE any HTML is emitted.
+ * PDO helpers
+ *
+ * Critical fix for HY093:
+ * - MySQL PDO (native prepares) can throw HY093 when the same named placeholder is used multiple times in one SQL.
+ * - We rewrite duplicates: :pass => :pass, :pass__2, :pass__3, etc., and bind each.
  */
-function export_csv_slice(PDO $pdo, string $where, array $params): void {
+function fetch_all(PDO $pdo, string $sql, array $params = []): array
+{
+    // Normalize keys (allow accidental ':key')
+    $norm = [];
+    foreach ($params as $k => $v) {
+        $norm[ltrim((string)$k, ':')] = $v;
+    }
+    $params = $norm;
+
+    $seen = [];
+    $bind = [];
+
+    $sql2 = preg_replace_callback(
+        '/\:([a-zA-Z_][a-zA-Z0-9_]*)/',
+        function ($m) use (&$seen, &$bind, $params) {
+            $name = $m[1];
+
+            if (!array_key_exists($name, $params)) {
+                throw new RuntimeException("Missing SQL parameter :{$name}");
+            }
+
+            $seen[$name] = ($seen[$name] ?? 0) + 1;
+
+            if ($seen[$name] === 1) {
+                $bind[$name] = $params[$name];
+                return ':' . $name;
+            }
+
+            $new = $name . '__' . $seen[$name];
+            $bind[$new] = $params[$name];
+            return ':' . $new;
+        },
+        $sql
+    );
+
+    $st = $pdo->prepare($sql2);
+    $st->execute($bind);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+function fetch_one(PDO $pdo, string $sql, array $params = []): ?array {
+    $rows = fetch_all($pdo, $sql, $params);
+    return $rows[0] ?? null;
+}
+
+/**
+ * Dashboard thresholds (decimals supported; your schema uses DECIMAL scores)
+ */
+$passThreshold      = gf('pass', 0, 40) ?? 24.0;
+$goodThreshold      = gf('good', 0, 40) ?? 30.0;
+$excellentThreshold = gf('excellent', 0, 40) ?? 35.0;
+
+$passThreshold = min($passThreshold, 40.0);
+$goodThreshold = min(max($goodThreshold, $passThreshold), 40.0);
+$excellentThreshold = min(max($excellentThreshold, $goodThreshold), 40.0);
+
+/**
+ * Filters (aligned to your zmonitoring_db.sql style schema)
+ */
+$filters = [
+    'academic_year' => gs('academic_year', 12),
+    'term'          => gi('term', 1, 2),
+    'exam_id'       => gi('exam_id', 1),
+    'subject_id'    => gi('subject_id', 1),
+    'class_code'    => gs('class_code', 30),
+    'track'         => gs('track', 40),
+    'date_from'     => gdate('date_from'),
+    'date_to'       => gdate('date_to'),
+];
+
+/**
+ * WHERE for result slice (aliases r,p,s,e)
+ */
+$where = [];
+$params = [];
+
+if ($filters['academic_year']) { $where[] = 'e.academic_year = :academic_year'; $params['academic_year'] = $filters['academic_year']; }
+if ($filters['term'])          { $where[] = 'e.term = :term'; $params['term'] = (int)$filters['term']; }
+if ($filters['exam_id'])       { $where[] = 'e.id = :exam_id'; $params['exam_id'] = (int)$filters['exam_id']; }
+if ($filters['subject_id'])    { $where[] = 's.id = :subject_id'; $params['subject_id'] = (int)$filters['subject_id']; }
+if ($filters['class_code'])    { $where[] = 'p.class_code = :class_code'; $params['class_code'] = $filters['class_code']; }
+if ($filters['track'])         { $where[] = 'p.track = :track'; $params['track'] = $filters['track']; }
+if ($filters['date_from'])     { $where[] = 'e.exam_date >= :date_from'; $params['date_from'] = $filters['date_from']; }
+if ($filters['date_to'])       { $where[] = 'e.exam_date <= :date_to'; $params['date_to'] = $filters['date_to']; }
+
+$whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+/**
+ * CSV export MUST run before header.php emits HTML.
+ */
+function export_csv_slice(PDO $pdo, string $whereSql, array $params): void
+{
     $rows = fetch_all($pdo, "
         SELECT
           e.academic_year,
@@ -121,6 +171,7 @@ function export_csv_slice(PDO $pdo, string $where, array $params): void {
           p.student_login,
           p.surname,
           p.name,
+          p.middle_name,
           s.code AS subject_code,
           s.name AS subject_name,
           r.score
@@ -128,24 +179,22 @@ function export_csv_slice(PDO $pdo, string $where, array $params): void {
         JOIN pupils p   ON p.id = r.pupil_id
         JOIN subjects s ON s.id = r.subject_id
         JOIN exams e    ON e.id = r.exam_id
-        $where
+        $whereSql
         ORDER BY COALESCE(e.exam_date,'9999-12-31') DESC, e.id DESC, p.class_code ASC, p.surname ASC, p.name ASC, s.name ASC
     ", $params);
 
-    $filename = 'results_slice_' . date('Ymd_His') . '.csv';
-
     header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Content-Disposition: attachment; filename="results_slice_' . date('Ymd_His') . '.csv"');
     header('X-Content-Type-Options: nosniff');
 
-    // UTF-8 BOM for Excel compatibility
+    // BOM for Excel
     echo "\xEF\xBB\xBF";
 
     $out = fopen('php://output', 'w');
     fputcsv($out, [
         'academic_year','term','exam_name','exam_date',
         'class_code','track',
-        'student_login','surname','name',
+        'student_login','surname','name','middle_name',
         'subject_code','subject_name',
         'score'
     ]);
@@ -161,6 +210,7 @@ function export_csv_slice(PDO $pdo, string $where, array $params): void {
             (string)$r['student_login'],
             (string)$r['surname'],
             (string)$r['name'],
+            (string)($r['middle_name'] ?? ''),
             (string)$r['subject_code'],
             (string)$r['subject_name'],
             (string)$r['score'],
@@ -170,88 +220,58 @@ function export_csv_slice(PDO $pdo, string $where, array $params): void {
     exit;
 }
 
+if (isset($_GET['export']) && (string)$_GET['export'] === '1') {
+    export_csv_slice($pdo, $whereSql, $params);
+}
+
 /**
- * -----------------------------
- * Filters (GET)
- * -----------------------------
+ * Safe to start HTML now
  */
-$filters = [
-    'academic_year' => gs('academic_year', 20),
-    'exam_id'       => gi('exam_id', 1),
-    'subject_id'    => gi('subject_id', 1),
-    'class_code'    => gs('class_code', 30),
-    'track'         => gs('track', 40),
-    'date_from'     => gdate('date_from'),
-    'date_to'       => gdate('date_to'),
-];
+$page_title = 'Dashboard';
+require __DIR__ . '/header.php';
 
-// thresholds (configurable later; defaults per spec)
-$passThreshold      = gi('pass', 0, 40) ?? 24;
-$goodThreshold      = gi('good', 0, 40) ?? 30;
-$excellentThreshold = gi('excellent', 0, 40) ?? 35;
-
-// Enforce ordering (no surprising UI)
-$passThreshold = min($passThreshold, 40);
-$goodThreshold = min(max($goodThreshold, $passThreshold), 40);
-$excellentThreshold = min(max($excellentThreshold, $goodThreshold), 40);
-
-// Dropdown sources
+/**
+ * Dropdown sources
+ */
 $years    = fetch_all($pdo, "SELECT DISTINCT academic_year FROM exams ORDER BY academic_year DESC");
 $subjects = fetch_all($pdo, "SELECT id, code, name FROM subjects ORDER BY name ASC");
-$classes  = fetch_all($pdo, "SELECT DISTINCT class_code FROM pupils WHERE class_code <> '' ORDER BY class_code ASC");
+$classes  = fetch_all($pdo, "SELECT DISTINCT class_code FROM pupils WHERE class_code IS NOT NULL AND class_code <> '' ORDER BY class_code ASC");
+$tracks   = fetch_all($pdo, "SELECT DISTINCT track FROM pupils WHERE track IS NOT NULL AND track <> '' ORDER BY track ASC");
 
-// Tracks (keep your Uzbek labels; these can be table-driven later)
-$tracks = [
-    ['v' => 'Aniq fanlar',   't' => 'Aniq fanlar'],
-    ['v' => 'Tabiiy fanlar', 't' => 'Tabiiy fanlar'],
-];
-
-// Exams list (optionally filtered by academic_year)
+// Exams list (optionally filtered by academic_year and/or term)
+$examWhere = [];
 $examParams = [];
-$examWhere = '';
-if (!empty($filters['academic_year'])) {
-    $examWhere = 'WHERE academic_year = :ay';
-    $examParams['ay'] = $filters['academic_year'];
-}
-$exams = fetch_all(
-    $pdo,
-    "SELECT id, academic_year, term, exam_name, exam_date
-     FROM exams
-     $examWhere
-     ORDER BY COALESCE(exam_date,'9999-12-31') DESC, id DESC",
-    $examParams
-);
+if ($filters['academic_year']) { $examWhere[] = 'academic_year = :ay'; $examParams['ay'] = $filters['academic_year']; }
+if ($filters['term'])          { $examWhere[] = 'term = :t'; $examParams['t'] = (int)$filters['term']; }
+$examWhereSql = $examWhere ? ('WHERE ' . implode(' AND ', $examWhere)) : '';
 
-// Build main slice filter clause
-[$where, $params] = build_filters($filters);
-
-// Handle export BEFORE output
-if (!empty($_GET['export']) && (string)$_GET['export'] === '1') {
-    export_csv_slice($pdo, $where, $params);
-}
+$exams = fetch_all($pdo, "
+    SELECT id, academic_year, term, exam_name, exam_date
+    FROM exams
+    $examWhereSql
+    ORDER BY COALESCE(exam_date,'9999-12-31') DESC, id DESC
+", $examParams);
 
 /**
- * -----------------------------
- * KPI queries
- * -----------------------------
+ * KPIs
  */
 $kpi = fetch_one($pdo, "
     SELECT
-        COUNT(*) AS n,
-        AVG(r.score) AS avg_score,
-        MIN(r.score) AS min_score,
-        MAX(r.score) AS max_score
+      COUNT(*) AS n,
+      AVG(r.score) AS avg_score,
+      MIN(r.score) AS min_score,
+      MAX(r.score) AS max_score
     FROM results r
     JOIN pupils p   ON p.id = r.pupil_id
     JOIN subjects s ON s.id = r.subject_id
     JOIN exams e    ON e.id = r.exam_id
-    $where
+    $whereSql
 ", $params) ?? ['n' => 0, 'avg_score' => null, 'min_score' => null, 'max_score' => null];
 
 $nRecords = (int)($kpi['n'] ?? 0);
 
 $median = null;
-$pass = ['passed' => 0, 'total' => 0];
+$passRow = ['passed' => 0, 'total' => 0];
 $bands = ['needs_support'=>0,'pass_only'=>0,'good'=>0,'excellent'=>0,'total'=>0];
 
 if ($nRecords > 0) {
@@ -265,14 +285,14 @@ if ($nRecords > 0) {
           JOIN pupils p   ON p.id = r.pupil_id
           JOIN subjects s ON s.id = r.subject_id
           JOIN exams e    ON e.id = r.exam_id
-          $where
+          $whereSql
         )
         SELECT AVG(score) AS median_score
         FROM x
         WHERE rn IN (FLOOR((cnt + 1)/2), FLOOR((cnt + 2)/2))
     ", $params);
 
-    $pass = fetch_one($pdo, "
+    $passRow = fetch_one($pdo, "
         SELECT
           SUM(r.score >= :pass) AS passed,
           COUNT(*) AS total
@@ -280,9 +300,10 @@ if ($nRecords > 0) {
         JOIN pupils p   ON p.id = r.pupil_id
         JOIN subjects s ON s.id = r.subject_id
         JOIN exams e    ON e.id = r.exam_id
-        $where
-    ", $params + ['pass' => $passThreshold]) ?? $pass;
+        $whereSql
+    ", $params + ['pass' => $passThreshold]) ?? $passRow;
 
+    // NOTE: :pass is used multiple times here; helper rewrites duplicates to avoid HY093.
     $bands = fetch_one($pdo, "
         SELECT
           SUM(r.score < :pass) AS needs_support,
@@ -294,16 +315,40 @@ if ($nRecords > 0) {
         JOIN pupils p   ON p.id = r.pupil_id
         JOIN subjects s ON s.id = r.subject_id
         JOIN exams e    ON e.id = r.exam_id
-        $where
+        $whereSql
     ", $params + ['pass' => $passThreshold, 'good' => $goodThreshold, 'excellent' => $excellentThreshold]) ?? $bands;
 }
 
-$passRate = 0.0;
-if (!empty($pass['total'])) {
-    $passRate = ((float)$pass['passed'] / (float)$pass['total']) * 100.0;
+$passRate = (!empty($passRow['total'])) ? ((float)$passRow['passed'] / (float)$passRow['total']) * 100.0 : 0.0;
+
+/**
+ * Histogram (integer bins 0..40) from DECIMAL score:
+ * bucket = FLOOR(score) clamped to 0..40
+ */
+$histMap = array_fill(0, 41, 0);
+if ($nRecords > 0) {
+    $hist = fetch_all($pdo, "
+        SELECT
+          LEAST(40, GREATEST(0, FLOOR(r.score))) AS bucket,
+          COUNT(*) AS n
+        FROM results r
+        JOIN pupils p   ON p.id = r.pupil_id
+        JOIN subjects s ON s.id = r.subject_id
+        JOIN exams e    ON e.id = r.exam_id
+        $whereSql
+        GROUP BY bucket
+        ORDER BY bucket ASC
+    ", $params);
+
+    foreach ($hist as $row) {
+        $b = (int)$row['bucket'];
+        if ($b >= 0 && $b <= 40) $histMap[$b] = (int)$row['n'];
+    }
 }
 
-// Top / Bottom pupils by average score
+/**
+ * Top / Bottom pupils (by average)
+ */
 $topPupils = $nRecords > 0 ? fetch_all($pdo, "
     SELECT
       p.id,
@@ -317,7 +362,7 @@ $topPupils = $nRecords > 0 ? fetch_all($pdo, "
     JOIN pupils p   ON p.id = r.pupil_id
     JOIN subjects s ON s.id = r.subject_id
     JOIN exams e    ON e.id = r.exam_id
-    $where
+    $whereSql
     GROUP BY p.id
     ORDER BY avg_score DESC, n DESC
     LIMIT 10
@@ -336,13 +381,15 @@ $bottomPupils = $nRecords > 0 ? fetch_all($pdo, "
     JOIN pupils p   ON p.id = r.pupil_id
     JOIN subjects s ON s.id = r.subject_id
     JOIN exams e    ON e.id = r.exam_id
-    $where
+    $whereSql
     GROUP BY p.id
     ORDER BY avg_score ASC, n DESC
     LIMIT 10
 ", $params) : [];
 
-// Subject difficulty
+/**
+ * Subject difficulty
+ */
 $subjectDifficulty = $nRecords > 0 ? fetch_all($pdo, "
     SELECT
       s.id,
@@ -355,48 +402,30 @@ $subjectDifficulty = $nRecords > 0 ? fetch_all($pdo, "
     JOIN pupils p   ON p.id = r.pupil_id
     JOIN subjects s ON s.id = r.subject_id
     JOIN exams e    ON e.id = r.exam_id
-    $where
+    $whereSql
     GROUP BY s.id
     HAVING COUNT(*) >= 5
     ORDER BY mean_score ASC, stdev_score DESC
     LIMIT 12
 ", $params) : [];
 
-// Histogram 0..40
-$histMap = array_fill(0, 41, 0);
-if ($nRecords > 0) {
-    $hist = fetch_all($pdo, "
-        SELECT r.score, COUNT(*) AS n
-        FROM results r
-        JOIN pupils p   ON p.id = r.pupil_id
-        JOIN subjects s ON s.id = r.subject_id
-        JOIN exams e    ON e.id = r.exam_id
-        $where
-        GROUP BY r.score
-        ORDER BY r.score ASC
-    ", $params);
-
-    foreach ($hist as $r) {
-        $sc = (int)$r['score'];
-        if ($sc >= 0 && $sc <= 40) $histMap[$sc] = (int)$r['n'];
-    }
-}
-$histMax = max($histMap) ?: 1;
-
-// Trend
+/**
+ * Trend (avg by exam)
+ */
 $trend = $nRecords > 0 ? fetch_all($pdo, "
     SELECT
       e.id AS exam_id,
       e.exam_name,
       e.exam_date,
       e.academic_year,
+      e.term,
       AVG(r.score) AS avg_score,
       COUNT(*) AS n
     FROM results r
     JOIN pupils p   ON p.id = r.pupil_id
     JOIN subjects s ON s.id = r.subject_id
     JOIN exams e    ON e.id = r.exam_id
-    $where
+    $whereSql
     GROUP BY e.id
     HAVING COUNT(*) >= 5
     ORDER BY COALESCE(e.exam_date,'9999-12-31') ASC, e.id ASC
@@ -404,10 +433,11 @@ $trend = $nRecords > 0 ? fetch_all($pdo, "
 ", $params) : [];
 
 /**
- * Active filter chips
+ * Filter chips
  */
 $chips = [];
 if ($filters['academic_year']) $chips[] = ['k'=>'academic_year','t'=>'Year: ' . $filters['academic_year']];
+if ($filters['term'])          $chips[] = ['k'=>'term','t'=>'Term: ' . (int)$filters['term']];
 if ($filters['exam_id'])       $chips[] = ['k'=>'exam_id','t'=>'Exam ID: ' . (int)$filters['exam_id']];
 if ($filters['subject_id'])    $chips[] = ['k'=>'subject_id','t'=>'Subject ID: ' . (int)$filters['subject_id']];
 if ($filters['class_code'])    $chips[] = ['k'=>'class_code','t'=>'Class: ' . $filters['class_code']];
@@ -415,10 +445,14 @@ if ($filters['track'])         $chips[] = ['k'=>'track','t'=>'Track: ' . $filter
 if ($filters['date_from'])     $chips[] = ['k'=>'date_from','t'=>'From: ' . $filters['date_from']];
 if ($filters['date_to'])       $chips[] = ['k'=>'date_to','t'=>'To: ' . $filters['date_to']];
 
-function score_badge_class(int $score, int $pass, int $good, int $excellent): string {
-    if ($score < $pass) return 'text-bg-danger';
-    if ($score < $good) return 'text-bg-warning text-dark';
-    if ($score < $excellent) return 'text-bg-primary';
+/**
+ * Score bucket badge based on thresholds.
+ * We compare integer bins to thresholds (good enough for histogram context).
+ */
+function score_badge_class(int $bucket, float $pass, float $good, float $excellent): string {
+    if ($bucket < $pass) return 'text-bg-danger';
+    if ($bucket < $good) return 'text-bg-warning text-dark';
+    if ($bucket < $excellent) return 'text-bg-primary';
     return 'text-bg-success';
 }
 
@@ -432,7 +466,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
             <div class="fw-semibold"><i class="bi bi-funnel me-2"></i>Filters</div>
             <?php if ($chips): ?>
               <span class="badge text-bg-light border">
-                <i class="bi bi-check2-circle me-1"></i><?= count($chips) ?> active
+                <i class="bi bi-check2-circle me-1"></i><?= (int)count($chips) ?> active
               </span>
             <?php endif; ?>
           </div>
@@ -444,7 +478,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
             <a class="btn btn-sm btn-outline-primary" href="results_import.php">
               <i class="bi bi-upload me-1"></i>Import Results
             </a>
-            <a class="btn btn-sm btn-primary" href="<?= h(url_with(['export' => 1])) ?>">
+            <a class="btn btn-sm btn-primary" href="<?= eh(url_with(['export' => 1])) ?>">
               <i class="bi bi-download me-1"></i>Export CSV
             </a>
           </div>
@@ -454,25 +488,31 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
           <div class="mt-2 d-flex flex-wrap gap-2">
             <?php foreach ($chips as $c): ?>
               <a class="badge rounded-pill text-bg-secondary-subtle border text-secondary-emphasis text-decoration-none"
-                 href="<?= h(url_with([$c['k'] => null])) ?>"
+                 href="<?= eh(url_with([$c['k'] => null])) ?>"
                  title="Remove filter">
-                <i class="bi bi-x-circle me-1"></i><?= h($c['t']) ?>
+                <i class="bi bi-x-circle me-1"></i><?= eh($c['t']) ?>
               </a>
             <?php endforeach; ?>
           </div>
         <?php endif; ?>
 
-        <form method="get" class="row g-2 mt-2">
+        <form method="get" class="row g-2 mt-3">
           <div class="col-md-2">
             <label class="form-label">Academic Year</label>
             <select name="academic_year" class="form-select">
               <option value="">All</option>
-              <?php foreach ($years as $y): ?>
-                <?php $ay = (string)$y['academic_year']; ?>
-                <option value="<?= h($ay) ?>" <?= ($filters['academic_year'] === $ay) ? 'selected' : '' ?>>
-                  <?= h($ay) ?>
-                </option>
+              <?php foreach ($years as $y): $ay = (string)$y['academic_year']; ?>
+                <option value="<?= eh($ay) ?>" <?= ($filters['academic_year'] === $ay) ? 'selected' : '' ?>><?= eh($ay) ?></option>
               <?php endforeach; ?>
+            </select>
+          </div>
+
+          <div class="col-md-1">
+            <label class="form-label">Term</label>
+            <select name="term" class="form-select">
+              <option value="">All</option>
+              <option value="1" <?= ($filters['term'] === 1) ? 'selected' : '' ?>>1</option>
+              <option value="2" <?= ($filters['term'] === 2) ? 'selected' : '' ?>>2</option>
             </select>
           </div>
 
@@ -487,9 +527,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
                   if (!empty($e['term'])) $label .= ' (Term ' . (int)$e['term'] . ')';
                   if (!empty($e['exam_date'])) $label .= ' • ' . (string)$e['exam_date'];
                 ?>
-                <option value="<?= $eid ?>" <?= ($filters['exam_id'] === $eid) ? 'selected' : '' ?>>
-                  <?= h($label) ?>
-                </option>
+                <option value="<?= $eid ?>" <?= ($filters['exam_id'] === $eid) ? 'selected' : '' ?>><?= eh($label) ?></option>
               <?php endforeach; ?>
             </select>
           </div>
@@ -498,10 +536,9 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
             <label class="form-label">Subject</label>
             <select name="subject_id" class="form-select">
               <option value="">All</option>
-              <?php foreach ($subjects as $s): ?>
-                <?php $sid = (int)$s['id']; ?>
+              <?php foreach ($subjects as $s): $sid = (int)$s['id']; ?>
                 <option value="<?= $sid ?>" <?= ($filters['subject_id'] === $sid) ? 'selected' : '' ?>>
-                  <?= h((string)$s['name']) ?><?= $s['code'] ? ' (' . h((string)$s['code']) . ')' : '' ?>
+                  <?= eh($s['name']) ?><?= !empty($s['code']) ? ' (' . eh($s['code']) . ')' : '' ?>
                 </option>
               <?php endforeach; ?>
             </select>
@@ -511,11 +548,8 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
             <label class="form-label">Class</label>
             <select name="class_code" class="form-select">
               <option value="">All</option>
-              <?php foreach ($classes as $c): ?>
-                <?php $cc = (string)$c['class_code']; ?>
-                <option value="<?= h($cc) ?>" <?= ($filters['class_code'] === $cc) ? 'selected' : '' ?>>
-                  <?= h($cc) ?>
-                </option>
+              <?php foreach ($classes as $c): $cc = (string)$c['class_code']; ?>
+                <option value="<?= eh($cc) ?>" <?= ($filters['class_code'] === $cc) ? 'selected' : '' ?>><?= eh($cc) ?></option>
               <?php endforeach; ?>
             </select>
           </div>
@@ -524,42 +558,50 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
             <label class="form-label">Track</label>
             <select name="track" class="form-select">
               <option value="">All</option>
-              <?php foreach ($tracks as $t): ?>
-                <option value="<?= h($t['v']) ?>" <?= ($filters['track'] === $t['v']) ? 'selected' : '' ?>>
-                  <?= h($t['t']) ?>
-                </option>
+              <?php foreach ($tracks as $t): $tv = (string)$t['track']; ?>
+                <option value="<?= eh($tv) ?>" <?= ($filters['track'] === $tv) ? 'selected' : '' ?>><?= eh($tv) ?></option>
               <?php endforeach; ?>
             </select>
           </div>
 
           <div class="col-md-2">
             <label class="form-label">Date from</label>
-            <input type="date" name="date_from" class="form-control" value="<?= h($filters['date_from']) ?>">
+            <input type="date" name="date_from" class="form-control" value="<?= eh($filters['date_from']) ?>">
           </div>
 
           <div class="col-md-2">
             <label class="form-label">Date to</label>
-            <input type="date" name="date_to" class="form-control" value="<?= h($filters['date_to']) ?>">
+            <input type="date" name="date_to" class="form-control" value="<?= eh($filters['date_to']) ?>">
           </div>
 
-          <div class="col-md-2">
-            <label class="form-label">Pass</label>
-            <input type="number" name="pass" min="0" max="40" class="form-control" value="<?= (int)$passThreshold ?>">
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">Good</label>
-            <input type="number" name="good" min="0" max="40" class="form-control" value="<?= (int)$goodThreshold ?>">
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">Excellent</label>
-            <input type="number" name="excellent" min="0" max="40" class="form-control" value="<?= (int)$excellentThreshold ?>">
+          <div class="col-12 mt-2">
+            <a class="text-decoration-none" data-bs-toggle="collapse" href="#advancedFilters" role="button" aria-expanded="false" aria-controls="advancedFilters">
+              <i class="bi bi-sliders me-1"></i>Advanced thresholds (DECIMAL supported)
+            </a>
           </div>
 
-          <div class="col-12 d-flex flex-wrap gap-2 align-items-end mt-2">
+          <div class="collapse" id="advancedFilters">
+            <div class="row g-2 mt-1">
+              <div class="col-md-2">
+                <label class="form-label">Pass</label>
+                <input type="number" step="0.1" name="pass" min="0" max="40" class="form-control" value="<?= eh($passThreshold) ?>">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label">Good</label>
+                <input type="number" step="0.1" name="good" min="0" max="40" class="form-control" value="<?= eh($goodThreshold) ?>">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label">Excellent</label>
+                <input type="number" step="0.1" name="excellent" min="0" max="40" class="form-control" value="<?= eh($excellentThreshold) ?>">
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12 d-flex flex-wrap gap-2 align-items-end mt-3">
             <button class="btn btn-primary">
               <i class="bi bi-search me-1"></i>Apply
             </button>
-            <a class="btn btn-outline-secondary" href="<?= h(url_with(['export' => 1])) ?>">
+            <a class="btn btn-outline-secondary" href="<?= eh(url_with(['export' => 1])) ?>">
               <i class="bi bi-download me-1"></i>Export CSV (slice)
             </a>
           </div>
@@ -579,65 +621,51 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
 <div class="row g-3 mb-3">
   <div class="col-md-3">
     <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small">Records</div>
-            <div class="fs-4 fw-semibold"><?= $nRecords ?></div>
-          </div>
-          <div class="text-muted fs-3"><i class="bi bi-database"></i></div>
+      <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+          <div class="text-muted small">Records</div>
+          <div class="fs-4 fw-semibold"><?= $nRecords ?></div>
         </div>
+        <div class="text-muted fs-3"><i class="bi bi-database"></i></div>
       </div>
     </div>
   </div>
 
   <div class="col-md-3">
     <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small">Average</div>
-            <div class="fs-4 fw-semibold">
-              <?= $kpi['avg_score'] !== null ? number_format((float)$kpi['avg_score'], 2) : '—' ?>
-            </div>
-            <div class="small text-muted">
-              Min <?= h((string)($kpi['min_score'] ?? '—')) ?> • Max <?= h((string)($kpi['max_score'] ?? '—')) ?>
-            </div>
-          </div>
-          <div class="text-muted fs-3"><i class="bi bi-graph-up"></i></div>
+      <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+          <div class="text-muted small">Average</div>
+          <div class="fs-4 fw-semibold"><?= ($kpi['avg_score'] !== null) ? number_format((float)$kpi['avg_score'], 2) : '—' ?></div>
+          <div class="small text-muted">Min <?= eh($kpi['min_score'] ?? '—') ?> • Max <?= eh($kpi['max_score'] ?? '—') ?></div>
         </div>
+        <div class="text-muted fs-3"><i class="bi bi-graph-up"></i></div>
       </div>
     </div>
   </div>
 
   <div class="col-md-3">
     <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small">Median</div>
-            <div class="fs-4 fw-semibold">
-              <?= !empty($median['median_score']) ? number_format((float)$median['median_score'], 2) : '—' ?>
-            </div>
-            <div class="small text-muted">Robust central tendency</div>
-          </div>
-          <div class="text-muted fs-3"><i class="bi bi-distribute-vertical"></i></div>
+      <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+          <div class="text-muted small">Median</div>
+          <div class="fs-4 fw-semibold"><?= !empty($median['median_score']) ? number_format((float)$median['median_score'], 2) : '—' ?></div>
+          <div class="small text-muted">Window-function based</div>
         </div>
+        <div class="text-muted fs-3"><i class="bi bi-distribute-vertical"></i></div>
       </div>
     </div>
   </div>
 
   <div class="col-md-3">
     <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="d-flex align-items-center justify-content-between">
-          <div>
-            <div class="text-muted small">Pass rate (≥ <?= (int)$passThreshold ?>)</div>
-            <div class="fs-4 fw-semibold"><?= number_format($passRate, 1) ?>%</div>
-            <div class="small text-muted"><?= (int)($pass['passed'] ?? 0) ?> / <?= (int)($pass['total'] ?? 0) ?></div>
-          </div>
-          <div class="text-muted fs-3"><i class="bi bi-check2-circle"></i></div>
+      <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+          <div class="text-muted small">Pass rate (≥ <?= eh($passThreshold) ?>)</div>
+          <div class="fs-4 fw-semibold"><?= number_format($passRate, 1) ?>%</div>
+          <div class="small text-muted"><?= (int)($passRow['passed'] ?? 0) ?> / <?= (int)($passRow['total'] ?? 0) ?></div>
         </div>
+        <div class="text-muted fs-3"><i class="bi bi-check2-circle"></i></div>
       </div>
     </div>
   </div>
@@ -648,34 +676,36 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
     <div class="card shadow-sm">
       <div class="card-body">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <div class="fw-semibold"><i class="bi bi-bar-chart-steps me-2"></i>Score distribution (0–40)</div>
-          <div class="small text-muted">Relative frequency</div>
+          <div class="fw-semibold"><i class="bi bi-bar-chart-steps me-2"></i>Score distribution (0–40 bins)</div>
+          <div class="small text-muted">Bucket = FLOOR(score)</div>
         </div>
 
         <div class="table-responsive">
           <table class="table table-sm align-middle mb-0">
             <thead class="table-light">
               <tr>
-                <th style="width:72px">Score</th>
+                <th style="width:72px">Bin</th>
                 <th>Distribution</th>
                 <th class="text-end" style="width:90px">Count</th>
+                <th class="text-end" style="width:80px">%</th>
               </tr>
             </thead>
             <tbody>
-              <?php for ($s = 0; $s <= 40; $s++): ?>
+              <?php for ($b = 0; $b <= 40; $b++): ?>
                 <?php
-                  $n = (int)$histMap[$s];
-                  $pct = ($n / $histMax) * 100.0;
-                  $badgeClass = score_badge_class($s, $passThreshold, $goodThreshold, $excellentThreshold);
+                  $n = (int)$histMap[$b];
+                  $pct = $nRecords > 0 ? ($n / $nRecords) * 100.0 : 0.0;
+                  $badgeClass = score_badge_class($b, $passThreshold, $goodThreshold, $excellentThreshold);
                 ?>
                 <tr>
-                  <td><span class="badge <?= h($badgeClass) ?>"><?= $s ?></span></td>
+                  <td><span class="badge <?= eh($badgeClass) ?>"><?= $b ?></span></td>
                   <td>
                     <div class="progress" style="height: 10px;">
-                      <div class="progress-bar" role="progressbar" style="width: <?= (float)$pct ?>%"></div>
+                      <div class="progress-bar" role="progressbar" style="width: <?= $pct ?>%"></div>
                     </div>
                   </td>
                   <td class="text-end"><?= $n ?></td>
+                  <td class="text-end text-muted"><?= number_format($pct, 1) ?></td>
                 </tr>
               <?php endfor; ?>
             </tbody>
@@ -717,8 +747,8 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
                 <?php foreach ($subjectDifficulty as $r): ?>
                   <tr>
                     <td>
-                      <div class="fw-semibold"><?= h((string)$r['name']) ?></div>
-                      <div class="small text-muted"><?= h((string)$r['code']) ?></div>
+                      <div class="fw-semibold"><?= eh($r['name']) ?></div>
+                      <div class="small text-muted"><?= eh($r['code']) ?></div>
                     </td>
                     <td class="text-end"><?= (int)$r['n'] ?></td>
                     <td class="text-end"><?= number_format((float)$r['mean_score'], 2) ?></td>
@@ -728,9 +758,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
               </tbody>
             </table>
           </div>
-          <div class="small text-muted mt-2">
-            Lower mean indicates higher difficulty; higher StdDev indicates more dispersion.
-          </div>
+          <div class="small text-muted mt-2">Lower mean implies higher difficulty; higher StdDev implies more dispersion.</div>
         <?php endif; ?>
       </div>
     </div>
@@ -759,10 +787,12 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
                 <?php foreach ($topPupils as $r): ?>
                   <tr>
                     <td>
-                      <div class="fw-semibold"><?= h((string)$r['surname']) ?> <?= h((string)$r['name']) ?></div>
-                      <div class="small text-muted"><code><?= h((string)$r['student_login']) ?></code></div>
+                      <div class="fw-semibold"><?= eh($r['surname']) ?> <?= eh($r['name']) ?></div>
+                      <?php if (!empty($r['student_login'])): ?>
+                        <div class="small text-muted"><code><?= eh($r['student_login']) ?></code></div>
+                      <?php endif; ?>
                     </td>
-                    <td><?= h((string)$r['class_code']) ?></td>
+                    <td><?= eh($r['class_code']) ?></td>
                     <td class="text-end"><?= (int)$r['n'] ?></td>
                     <td class="text-end fw-semibold"><?= number_format((float)$r['avg_score'], 2) ?></td>
                   </tr>
@@ -796,10 +826,12 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
                 <?php foreach ($bottomPupils as $r): ?>
                   <tr>
                     <td>
-                      <div class="fw-semibold"><?= h((string)$r['surname']) ?> <?= h((string)$r['name']) ?></div>
-                      <div class="small text-muted"><code><?= h((string)$r['student_login']) ?></code></div>
+                      <div class="fw-semibold"><?= eh($r['surname']) ?> <?= eh($r['name']) ?></div>
+                      <?php if (!empty($r['student_login'])): ?>
+                        <div class="small text-muted"><code><?= eh($r['student_login']) ?></code></div>
+                      <?php endif; ?>
                     </td>
-                    <td><?= h((string)$r['class_code']) ?></td>
+                    <td><?= eh($r['class_code']) ?></td>
                     <td class="text-end"><?= (int)$r['n'] ?></td>
                     <td class="text-end fw-semibold"><?= number_format((float)$r['avg_score'], 2) ?></td>
                   </tr>
@@ -819,7 +851,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
       <div class="card-body">
         <div class="fw-semibold mb-2"><i class="bi bi-activity me-2"></i>Trend (average by exam)</div>
         <?php if (!$trend): ?>
-          <div class="text-muted">Not enough data for trend lines in this slice.</div>
+          <div class="text-muted">Not enough data for trend metrics in this slice.</div>
         <?php else: ?>
           <div class="table-responsive">
             <table class="table table-sm table-striped align-middle mb-0">
@@ -827,6 +859,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
                 <tr>
                   <th>Exam</th>
                   <th>Year</th>
+                  <th>Term</th>
                   <th>Date</th>
                   <th class="text-end">N</th>
                   <th class="text-end">Avg</th>
@@ -835,9 +868,10 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
               <tbody>
                 <?php foreach ($trend as $t): ?>
                   <tr>
-                    <td class="fw-semibold"><?= h((string)$t['exam_name']) ?></td>
-                    <td><?= h((string)$t['academic_year']) ?></td>
-                    <td><?= h((string)($t['exam_date'] ?? '')) ?></td>
+                    <td class="fw-semibold"><?= eh($t['exam_name']) ?></td>
+                    <td><?= eh($t['academic_year']) ?></td>
+                    <td><?= eh($t['term']) ?></td>
+                    <td><?= eh($t['exam_date']) ?></td>
                     <td class="text-end"><?= (int)$t['n'] ?></td>
                     <td class="text-end fw-semibold"><?= number_format((float)$t['avg_score'], 2) ?></td>
                   </tr>
@@ -845,9 +879,7 @@ function score_badge_class(int $score, int $pass, int $good, int $excellent): st
               </tbody>
             </table>
           </div>
-          <div class="small text-muted mt-2">
-            For clearer trend diagnostics, apply Subject and/or Class filter to reduce mixing effects.
-          </div>
+          <div class="small text-muted mt-2">For clearer trends, apply Subject and/or Class filter.</div>
         <?php endif; ?>
       </div>
     </div>

@@ -530,7 +530,7 @@ if ($nResults > 0) {
         JOIN exams e    ON e.id = r.exam_id
         $whereSql
         GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
-        HAVING COUNT(*) >= 6
+        HAVING COUNT(*) >= 2
            AND (AVG(r.score) < :pass OR MIN(r.score) <= 0 OR (AVG(r.score >= :pass) * 100.0) < 50)
         ORDER BY mean_score ASC, pass_rate ASC, n DESC
         LIMIT 20
@@ -901,7 +901,7 @@ foreach ([
       <div class="card-body">
         <div class="fw-semibold mb-2"><i class="bi bi-exclamation-triangle me-2"></i>At-risk pupils (heuristic)</div>
         <div class="small text-muted mb-2">
-          Criteria: at least 6 results in slice AND (mean &lt; pass OR any 0 OR pass-rate &lt; 50%).
+          Criteria: at least 2 results in slice AND (mean &lt; pass OR any 0 OR pass-rate &lt; 50%).
         </div>
         <?php if (!$atRisk): ?>
           <div class="text-muted">No at-risk pupils detected under the current heuristic for this slice.</div>

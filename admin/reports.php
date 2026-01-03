@@ -114,26 +114,25 @@ $filters = [
     'date_to'       => gdate('date_to'),
 ];
 
-$passThreshold      = gf('pass', 0, 40) ?? 24.0;
-$goodThreshold      = gf('good', 0, 40) ?? 30.0;
-$excellentThreshold = gf('excellent', 0, 40) ?? 35.0;
+// Your current defaults (keep)
+$passThreshold      = gf('pass', 0, 40) ?? 18.4;
+$goodThreshold      = gf('good', 0, 40) ?? 24.4;
+$excellentThreshold = gf('excellent', 0, 40) ?? 34.4;
 
 $passThreshold = min($passThreshold, 40.0);
 $goodThreshold = min(max($goodThreshold, $passThreshold), 40.0);
 $excellentThreshold = min(max($excellentThreshold, $goodThreshold), 40.0);
 
-/**
- * At-risk tuning:
- * - If subject or exam is fixed, a pupil may have only 1 row in slice, so default min N must be 1.
- * - Otherwise default 2 (gives a bit of stability).
- */
+// At-risk tuning
 $defaultRiskMinN = ($filters['subject_id'] || $filters['exam_id']) ? 1 : 2;
 $riskMinN = gi('risk_min_n', 1, 999) ?? $defaultRiskMinN;
 $riskPassPct = gf('risk_pass_pct', 0, 100) ?? 50.0;
 
-/**
- * Slice WHERE (for summaries)
- */
+// When a class is selected, show smaller curated lists (max 24 pupils per class)
+$listLimit = $filters['class_code'] ? 12 : 24;
+
+/* ----------------------------- Slice WHERE (for summaries) ----------------------------- */
+
 $where = [];
 $params = [];
 
@@ -162,12 +161,6 @@ if ($ajax === 'pupil_scores') {
         exit;
     }
 
-    // Build scope:
-    // - Always for this pupil
-    // - Respect academic_year if selected
-    // - If term selected: term-only; else all terms
-    // - Respect exam_id only if selected (useful when staff wants "this exam only")
-    // - DO NOT restrict by subject_id (user asked: "student's all scores")
     $w = ['r.pupil_id = :pupil_id'];
     $pp = ['pupil_id' => $pupilId];
 
@@ -177,7 +170,6 @@ if ($ajax === 'pupil_scores') {
 
     $wSql = 'WHERE ' . implode(' AND ', $w);
 
-    // Basic pupil header
     $p = fetch_one($pdo, "
         SELECT id, student_login, surname, name, middle_name, class_code, track
         FROM pupils
@@ -293,7 +285,7 @@ if ($export) {
             GROUP BY b.subject_id, b.subject_code, b.subject_name, m.median
             ORDER BY mean ASC, stdev DESC, n DESC
             ",
-            $params + ['pass' => $passThreshold]
+            array_merge($params, ['pass' => $passThreshold])
         );
     }
 
@@ -322,7 +314,7 @@ if ($export) {
             GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
             ORDER BY mean DESC, n DESC
             ",
-            $params + ['pass' => $passThreshold]
+            array_merge($params, ['pass' => $passThreshold])
         );
     }
 
@@ -347,7 +339,7 @@ if ($export) {
             GROUP BY p.class_code, p.track
             ORDER BY mean DESC, pass_rate DESC, n DESC
             ",
-            $params + ['pass' => $passThreshold]
+            array_merge($params, ['pass' => $passThreshold])
         );
     }
 
@@ -386,6 +378,14 @@ if ($export) {
 
 $page_title = 'Reports';
 require __DIR__ . '/header.php';
+
+// CSP nonce support for inline scripts
+$cspNonce = '';
+if (function_exists('csp_nonce')) {
+    $cspNonce = (string)csp_nonce();
+} elseif (!empty($_SESSION['csp_nonce'])) {
+    $cspNonce = (string)$_SESSION['csp_nonce'];
+}
 
 /* ----------------------------- filter sources ----------------------------- */
 
@@ -461,7 +461,7 @@ if ($nResults > 0) {
         JOIN subjects s ON s.id = r.subject_id
         JOIN exams e    ON e.id = r.exam_id
         $whereSql
-    ", $params + ['pass' => $passThreshold]) ?? $passRow;
+    ", array_merge($params, ['pass' => $passThreshold])) ?? $passRow;
 }
 $passRate = (!empty($passRow['total'])) ? ((float)$passRow['passed'] / (float)$passRow['total']) * 100.0 : 0.0;
 
@@ -509,7 +509,7 @@ if ($nResults > 0) {
         LEFT JOIN med m ON m.subject_id = b.subject_id
         GROUP BY b.subject_id, b.subject_code, b.subject_name, m.median
         ORDER BY mean_score ASC, stdev_score DESC, n DESC
-    ", $params + ['pass' => $passThreshold]);
+    ", array_merge($params, ['pass' => $passThreshold]));
 }
 
 /* ----------------------------- class comparison ----------------------------- */
@@ -531,13 +531,78 @@ if ($nResults > 0) {
         $whereSql
         GROUP BY p.class_code, p.track
         ORDER BY mean_score DESC, pass_rate DESC, n DESC
-    ", $params + ['pass' => $passThreshold]);
+    ", array_merge($params, ['pass' => $passThreshold]));
+}
+
+/* ----------------------------- at-risk FIRST (so we can exclude from top list) ----------------------------- */
+
+$atRisk = [];
+$excludeHaving = '';
+$excludeParams = [];
+
+if ($nResults > 0) {
+    $atRisk = fetch_all($pdo, "
+        SELECT
+          p.id,
+          p.student_login,
+          p.surname,
+          p.name,
+          p.class_code,
+          p.track,
+          COUNT(*) AS n,
+          AVG(r.score) AS mean_score,
+          MIN(r.score) AS min_score,
+          MAX(r.score) AS max_score,
+          AVG(r.score >= :pass) * 100.0 AS pass_rate,
+          CASE
+            WHEN AVG(r.score) < :pass THEN 'Low mean'
+            WHEN MIN(r.score) <= 0 THEN 'Zero score'
+            WHEN (AVG(r.score >= :pass) * 100.0) < :risk_pass_pct THEN 'Low pass rate'
+            ELSE '—'
+          END AS risk_reason
+        FROM results r
+        JOIN pupils p   ON p.id = r.pupil_id
+        JOIN subjects s ON s.id = r.subject_id
+        JOIN exams e    ON e.id = r.exam_id
+        $whereSql
+        GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
+        HAVING COUNT(*) >= :risk_min_n
+           AND (
+             AVG(r.score) < :pass
+             OR MIN(r.score) <= 0
+             OR (AVG(r.score >= :pass) * 100.0) < :risk_pass_pct
+           )
+        ORDER BY mean_score ASC, pass_rate ASC, n DESC
+        LIMIT {$listLimit}
+    ", array_merge($params, [
+        'pass' => $passThreshold,
+        'risk_min_n' => $riskMinN,
+        'risk_pass_pct' => $riskPassPct,
+    ]));
+
+    // Build exclusion placeholders for the "goodies" list (SQL-level, avoids PHP filtering + avoids array+null)
+    if ($atRisk) {
+        $ids = [];
+        foreach ($atRisk as $r) $ids[] = (int)$r['id'];
+        $ids = array_values(array_unique($ids));
+        if ($ids) {
+            $ph = [];
+            foreach ($ids as $i => $id) {
+                $k = "ex{$i}";
+                $ph[] = ":{$k}";
+                $excludeParams[$k] = $id;
+            }
+            // Use HAVING for simplicity (valid in MySQL)
+            $excludeHaving = " AND p.id NOT IN (" . implode(',', $ph) . ")";
+        }
+    }
 }
 
 /* ----------------------------- top/bottom pupils ----------------------------- */
 
 $topPupils = $bottomPupils = [];
 if ($nResults > 0) {
+    // "Goodies": enforce >= Good threshold and exclude at-risk pupils
     $topPupils = fetch_all($pdo, "
         SELECT
           p.id,
@@ -556,9 +621,11 @@ if ($nResults > 0) {
         JOIN exams e    ON e.id = r.exam_id
         $whereSql
         GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
+        HAVING AVG(r.score) >= :good
+        {$excludeHaving}
         ORDER BY mean_score DESC, n DESC
-        LIMIT 24
-    ", $params);
+        LIMIT {$listLimit}
+    ", array_merge($params, $excludeParams, ['good' => $goodThreshold]));
 
     $bottomPupils = fetch_all($pdo, "
         SELECT
@@ -579,46 +646,8 @@ if ($nResults > 0) {
         $whereSql
         GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
         ORDER BY mean_score ASC, n DESC
-        LIMIT 24
+        LIMIT {$listLimit}
     ", $params);
-}
-
-/* ----------------------------- at-risk (configurable; works with subject filter) ----------------------------- */
-
-$atRisk = [];
-if ($nResults > 0) {
-    $atRisk = fetch_all($pdo, "
-        SELECT
-          p.id,
-          p.student_login,
-          p.surname,
-          p.name,
-          p.class_code,
-          p.track,
-          COUNT(*) AS n,
-          AVG(r.score) AS mean_score,
-          MIN(r.score) AS min_score,
-          MAX(r.score) AS max_score,
-          AVG(r.score >= :pass) * 100.0 AS pass_rate
-        FROM results r
-        JOIN pupils p   ON p.id = r.pupil_id
-        JOIN subjects s ON s.id = r.subject_id
-        JOIN exams e    ON e.id = r.exam_id
-        $whereSql
-        GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
-        HAVING COUNT(*) >= :risk_min_n
-           AND (
-             AVG(r.score) < :pass
-             OR MIN(r.score) <= 0
-             OR (AVG(r.score >= :pass) * 100.0) < :risk_pass_pct
-           )
-        ORDER BY mean_score ASC, pass_rate ASC, n DESC
-        LIMIT 24
-    ", $params + [
-        'pass' => $passThreshold,
-        'risk_min_n' => $riskMinN,
-        'risk_pass_pct' => $riskPassPct,
-    ]);
 }
 
 /* ----------------------------- trend by exam (slice trend) ----------------------------- */
@@ -645,7 +674,7 @@ if ($nResults > 0) {
         HAVING COUNT(*) >= 10
         ORDER BY COALESCE(e.exam_date,'9999-12-31') ASC, e.id ASC
         LIMIT 18
-    ", $params + ['pass' => $passThreshold]);
+    ", array_merge($params, ['pass' => $passThreshold]));
 }
 
 /* ----------------------------- UI chips ----------------------------- */
@@ -774,7 +803,7 @@ foreach ([
 
           <div class="col-12 mt-2">
             <a class="text-decoration-none" data-bs-toggle="collapse" href="#advancedThresholds" role="button" aria-expanded="false" aria-controls="advancedThresholds">
-              <i class="bi bi-sliders me-1"></i>Thresholds & Risk (DECIMAL)
+              <i class="bi bi-sliders me-1"></i>Thresholds & Risk
             </a>
           </div>
           <div class="collapse" id="advancedThresholds">
@@ -800,6 +829,11 @@ foreach ([
                 <label class="form-label">Risk Pass%</label>
                 <input type="number" step="0.1" name="risk_pass_pct" min="0" max="100" class="form-control" value="<?= eh($riskPassPct) ?>">
               </div>
+              <div class="col-md-2">
+                <label class="form-label">List limit</label>
+                <input type="number" class="form-control" value="<?= (int)$listLimit ?>" disabled>
+                <div class="form-text">Class selected ⇒ 12, otherwise 24.</div>
+              </div>
             </div>
           </div>
 
@@ -822,6 +856,7 @@ foreach ([
   </div>
 </div>
 
+<!-- KPI cards -->
 <div class="row g-3 mb-3">
   <div class="col-md-3">
     <div class="card shadow-sm"><div class="card-body">
@@ -853,13 +888,14 @@ foreach ([
   </div>
 </div>
 
+<!-- Subject + Class summaries -->
 <div class="row g-3 mb-3">
   <div class="col-lg-7">
     <div class="card shadow-sm">
       <div class="card-body">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <div class="fw-semibold"><i class="bi bi-journal-text me-2"></i>Subject summary</div>
-          <div class="small text-muted">Lower mean often indicates higher difficulty; higher StdDev indicates more dispersion.</div>
+          <div class="small text-muted">Lower mean can imply higher difficulty; higher StdDev implies more dispersion.</div>
         </div>
 
         <?php if (!$subjectSummary): ?>
@@ -944,13 +980,20 @@ foreach ([
   </div>
 </div>
 
+<!-- Goodies vs At-risk -->
 <div class="row g-3 mb-3">
   <div class="col-lg-6">
     <div class="card shadow-sm">
       <div class="card-body">
-        <div class="fw-semibold mb-2"><i class="bi bi-trophy me-2"></i>Top pupils (by mean)</div>
+        <div class="fw-semibold mb-2"><i class="bi bi-trophy me-2"></i>High performers 
+        <span class="badge text-bg-light border">
+            (mean ≥ <?= eh($goodThreshold) ?>)
+          </span></div>
+          <div class="small text-muted mb-2">
+          Students who scored more than <strong><?= eh($goodThreshold) ?></strong>.
+        </div>
         <?php if (!$topPupils): ?>
-          <div class="text-muted">No pupil ranking available.</div>
+          <div class="text-muted">No high performers found for this slice.</div>
         <?php else: ?>
           <div class="table-responsive">
             <table class="table table-sm table-striped align-middle mb-0">
@@ -1003,9 +1046,6 @@ foreach ([
         </div>
         <div class="small text-muted mb-2">
           Criteria: N ≥ <?= (int)$riskMinN ?> AND (mean &lt; pass OR any 0 OR pass% &lt; <?= eh($riskPassPct) ?>).
-          <?php if ($filters['subject_id'] || $filters['exam_id']): ?>
-            <span class="text-muted">Note: subject/exam filter detected, default Min N becomes 1.</span>
-          <?php endif; ?>
         </div>
 
         <?php if (!$atRisk): ?>
@@ -1026,6 +1066,7 @@ foreach ([
                   <th class="text-end">Mean</th>
                   <th class="text-end">Pass%</th>
                   <th class="text-end">Min</th>
+                  <th>Reason</th>
                 </tr>
               </thead>
               <tbody>
@@ -1050,6 +1091,7 @@ foreach ([
                     </td>
                     <td class="text-end"><?= pct((float)$r['pass_rate'], 1) ?></td>
                     <td class="text-end"><?= number_format((float)$r['min_score'], 2) ?></td>
+                    <td><span class="badge text-bg-light border"><?= eh($r['risk_reason'] ?? '—') ?></span></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -1062,6 +1104,7 @@ foreach ([
   </div>
 </div>
 
+<!-- Trend -->
 <div class="row g-3 mb-4">
   <div class="col-12">
     <div class="card shadow-sm">
@@ -1100,7 +1143,7 @@ foreach ([
               </tbody>
             </table>
           </div>
-          <div class="small text-muted mt-2">For best trend interpretation, fix Subject and Class (otherwise this mixes multiple skill domains).</div>
+          <div class="small text-muted mt-2">For best interpretation, fix Subject and Class (otherwise this mixes domains).</div>
         <?php endif; ?>
       </div>
     </div>
@@ -1144,7 +1187,7 @@ foreach ([
             </table>
           </div>
           <div class="small text-muted mt-2">
-            Note: this modal shows <span class="fw-semibold">all subjects</span> for the selected pupil.
+            This modal shows <span class="fw-semibold">all subjects</span> for the selected pupil.
             If Term filter is set, it shows that term only; otherwise all terms.
           </div>
         </div>
@@ -1159,12 +1202,18 @@ foreach ([
   </div>
 </div>
 
-<script>
+<script<?= $cspNonce ? ' nonce="' . eh($cspNonce) . '"' : '' ?>>
 (() => {
   const modalEl = document.getElementById('pupilScoresModal');
   if (!modalEl) return;
 
-  const modal = new bootstrap.Modal(modalEl);
+  function getBootstrapModal() {
+    if (window.bootstrap && typeof window.bootstrap.Modal === 'function') {
+      return new window.bootstrap.Modal(modalEl);
+    }
+    return null;
+  }
+
   const titleEl = document.getElementById('pupilScoresModalLabel');
   const subEl = document.getElementById('pupilScoresModalSub');
 
@@ -1177,10 +1226,13 @@ foreach ([
     loadingEl.classList.toggle('d-none', state !== 'loading');
     errorEl.classList.toggle('d-none', state !== 'error');
     contentEl.classList.toggle('d-none', state !== 'ready');
+    if (state === 'error') errorEl.textContent = msg || 'Failed to load.';
+  }
 
-    if (state === 'error') {
-      errorEl.textContent = msg || 'Failed to load.';
-    }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'
+    }[c]));
   }
 
   async function loadPupilScores(pupilId, label) {
@@ -1194,11 +1246,18 @@ foreach ([
     url.searchParams.set('pupil_id', String(pupilId));
 
     try {
-      const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
-      const data = await res.json();
+      const res = await fetch(url.toString(), {
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin'
+      });
+
+      const text = await res.text();
+      let data = null;
+      try { data = JSON.parse(text); } catch (_) {}
 
       if (!res.ok || !data || !data.ok) {
-        throw new Error((data && data.error) ? data.error : 'Request failed');
+        const err = (data && data.error) ? data.error : ('Request failed (HTTP ' + res.status + ')');
+        throw new Error(err);
       }
 
       const p = data.pupil || {};
@@ -1206,7 +1265,7 @@ foreach ([
       const rows = data.rows || [];
 
       const who = [
-        (p.surname || '') + ' ' + (p.name || ''),
+        ((p.surname || '') + ' ' + (p.name || '')).trim(),
         p.student_login ? ('(' + p.student_login + ')') : '',
         p.class_code ? ('Class ' + p.class_code) : '',
         p.track ? ('• ' + p.track) : ''
@@ -1243,8 +1302,9 @@ foreach ([
         date.textContent = r.exam_date || '';
 
         const subj = document.createElement('td');
-        subj.innerHTML = `<div class="fw-semibold">${escapeHtml(r.subject_name || '')}</div>
-                          <div class="small text-muted">${escapeHtml(r.subject_code || '')}</div>`;
+        subj.innerHTML =
+          `<div class="fw-semibold">${escapeHtml(r.subject_name || '')}</div>
+           <div class="small text-muted">${escapeHtml(r.subject_code || '')}</div>`;
 
         const score = document.createElement('td');
         score.className = 'text-end fw-semibold';
@@ -1260,20 +1320,23 @@ foreach ([
     }
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({
-      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'
-    }[c]));
-  }
+  // Event delegation
+  document.addEventListener('click', (ev) => {
+    const row = ev.target.closest('.pupil-row');
+    if (!row) return;
 
-  document.querySelectorAll('.pupil-row').forEach(row => {
-    row.addEventListener('click', () => {
-      const pupilId = row.getAttribute('data-pupil-id');
-      const label = row.getAttribute('data-pupil-label') || '';
-      if (!pupilId) return;
-      modal.show();
-      loadPupilScores(pupilId, label);
-    });
+    const pupilId = row.getAttribute('data-pupil-id');
+    const label = row.getAttribute('data-pupil-label') || '';
+    if (!pupilId) return;
+
+    const modal = getBootstrapModal();
+    if (!modal) {
+      alert('Bootstrap JS is not available. Ensure bootstrap.bundle.min.js is loaded.');
+      return;
+    }
+
+    modal.show();
+    loadPupilScores(pupilId, label);
   });
 })();
 </script>

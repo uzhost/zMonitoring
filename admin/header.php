@@ -117,8 +117,8 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
               </a>
             </li>
             <li>
-              <a class="dropdown-item<?= $active('subject_import.php') ?>" href="subject_import.php">
-                <i class="bi bi-journal-text me-2"></i> Subjects import
+              <a class="dropdown-item<?= $active('results_import.php') ?>" href="results_import.php">
+                <i class="bi bi-journal-text me-2"></i> Results import
               </a>
             </li>
             <li><hr class="dropdown-divider"></li>

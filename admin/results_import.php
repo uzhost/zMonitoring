@@ -32,7 +32,7 @@ const FILE_TTL_SECONDS   = 6 * 3600;    // 6 hours
 // Score policy (DECIMALS=1 allows 27.5). If you want 2 decimals set to 2 and adjust schema.
 const SCORE_MIN          = 0.0;
 const SCORE_MAX          = 40.0;
-const SCORE_DECIMALS     = 1;
+const SCORE_DECIMALS     = 2;
 
 function nhead(string $h): string
 {

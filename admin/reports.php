@@ -1,5 +1,5 @@
 <?php
-// admin/reports.php — Full analysis reports (drop-in; DECIMAL-safe; fixes HY093; CSV export; zmonitoring_db.sql aligned)
+// admin/reports.php — Full analysis reports (drop-in; DECIMAL-safe; fixes HY093; CSV export; at-risk + pupil modal)
 
 declare(strict_types=1);
 
@@ -123,7 +123,16 @@ $goodThreshold = min(max($goodThreshold, $passThreshold), 40.0);
 $excellentThreshold = min(max($excellentThreshold, $goodThreshold), 40.0);
 
 /**
- * Slice WHERE
+ * At-risk tuning:
+ * - If subject or exam is fixed, a pupil may have only 1 row in slice, so default min N must be 1.
+ * - Otherwise default 2 (gives a bit of stability).
+ */
+$defaultRiskMinN = ($filters['subject_id'] || $filters['exam_id']) ? 1 : 2;
+$riskMinN = gi('risk_min_n', 1, 999) ?? $defaultRiskMinN;
+$riskPassPct = gf('risk_pass_pct', 0, 100) ?? 50.0;
+
+/**
+ * Slice WHERE (for summaries)
  */
 $where = [];
 $params = [];
@@ -138,6 +147,80 @@ if ($filters['date_from'])     { $where[] = 'e.exam_date >= :date_from'; $params
 if ($filters['date_to'])       { $where[] = 'e.exam_date <= :date_to'; $params['date_to'] = $filters['date_to']; }
 
 $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+/* ----------------------------- AJAX endpoint: pupil scores (BEFORE HTML) ----------------------------- */
+
+$ajax = gs('ajax', 40);
+if ($ajax === 'pupil_scores') {
+    header('Content-Type: application/json; charset=UTF-8');
+    header('X-Content-Type-Options: nosniff');
+
+    $pupilId = gi('pupil_id', 1);
+    if (!$pupilId) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'Missing pupil_id']);
+        exit;
+    }
+
+    // Build scope:
+    // - Always for this pupil
+    // - Respect academic_year if selected
+    // - If term selected: term-only; else all terms
+    // - Respect exam_id only if selected (useful when staff wants "this exam only")
+    // - DO NOT restrict by subject_id (user asked: "student's all scores")
+    $w = ['r.pupil_id = :pupil_id'];
+    $pp = ['pupil_id' => $pupilId];
+
+    if ($filters['academic_year']) { $w[] = 'e.academic_year = :ay'; $pp['ay'] = $filters['academic_year']; }
+    if ($filters['term'])          { $w[] = 'e.term = :t'; $pp['t'] = (int)$filters['term']; }
+    if ($filters['exam_id'])       { $w[] = 'e.id = :eid'; $pp['eid'] = (int)$filters['exam_id']; }
+
+    $wSql = 'WHERE ' . implode(' AND ', $w);
+
+    // Basic pupil header
+    $p = fetch_one($pdo, "
+        SELECT id, student_login, surname, name, middle_name, class_code, track
+        FROM pupils
+        WHERE id = :id
+        LIMIT 1
+    ", ['id' => $pupilId]);
+
+    if (!$p) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'Pupil not found']);
+        exit;
+    }
+
+    $rows = fetch_all($pdo, "
+        SELECT
+          e.id AS exam_id,
+          e.academic_year,
+          e.term,
+          e.exam_name,
+          e.exam_date,
+          s.id AS subject_id,
+          s.code AS subject_code,
+          s.name AS subject_name,
+          r.score
+        FROM results r
+        JOIN exams e    ON e.id = r.exam_id
+        JOIN subjects s ON s.id = r.subject_id
+        $wSql
+        ORDER BY COALESCE(e.exam_date,'9999-12-31') DESC, e.id DESC, s.name ASC
+    ", $pp);
+
+    echo json_encode([
+        'ok' => true,
+        'pupil' => $p,
+        'scope' => [
+            'academic_year' => $filters['academic_year'],
+            'term' => $filters['term'],
+            'exam_id' => $filters['exam_id'],
+        ],
+        'rows' => $rows,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
 
 /* ----------------------------- CSV exports (BEFORE HTML) ----------------------------- */
 
@@ -154,10 +237,7 @@ function export_csv(PDO $pdo, string $filename, array $headers, string $sql, arr
     fputcsv($out, $headers);
     foreach ($rows as $r) {
         $line = [];
-        foreach ($headers as $k) {
-            // header keys are also expected as aliases in SQL below
-            $line[] = isset($r[$k]) ? (string)$r[$k] : '';
-        }
+        foreach ($headers as $k) $line[] = isset($r[$k]) ? (string)$r[$k] : '';
         fputcsv($out, $line);
     }
     fclose($out);
@@ -477,7 +557,7 @@ if ($nResults > 0) {
         $whereSql
         GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
         ORDER BY mean_score DESC, n DESC
-        LIMIT 10
+        LIMIT 24
     ", $params);
 
     $bottomPupils = fetch_all($pdo, "
@@ -499,16 +579,12 @@ if ($nResults > 0) {
         $whereSql
         GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
         ORDER BY mean_score ASC, n DESC
-        LIMIT 10
+        LIMIT 24
     ", $params);
 }
 
-/* ----------------------------- at-risk (simple heuristics) ----------------------------- */
-/**
- * Heuristic:
- * - Enough data: >= 6 results in slice
- * - AND either mean < passThreshold OR min_score == 0 OR pass_rate < 50
- */
+/* ----------------------------- at-risk (configurable; works with subject filter) ----------------------------- */
+
 $atRisk = [];
 if ($nResults > 0) {
     $atRisk = fetch_all($pdo, "
@@ -530,11 +606,19 @@ if ($nResults > 0) {
         JOIN exams e    ON e.id = r.exam_id
         $whereSql
         GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
-        HAVING COUNT(*) >= 2
-           AND (AVG(r.score) < :pass OR MIN(r.score) <= 0 OR (AVG(r.score >= :pass) * 100.0) < 50)
+        HAVING COUNT(*) >= :risk_min_n
+           AND (
+             AVG(r.score) < :pass
+             OR MIN(r.score) <= 0
+             OR (AVG(r.score >= :pass) * 100.0) < :risk_pass_pct
+           )
         ORDER BY mean_score ASC, pass_rate ASC, n DESC
-        LIMIT 20
-    ", $params + ['pass' => $passThreshold]);
+        LIMIT 24
+    ", $params + [
+        'pass' => $passThreshold,
+        'risk_min_n' => $riskMinN,
+        'risk_pass_pct' => $riskPassPct,
+    ]);
 }
 
 /* ----------------------------- trend by exam (slice trend) ----------------------------- */
@@ -564,7 +648,7 @@ if ($nResults > 0) {
     ", $params + ['pass' => $passThreshold]);
 }
 
-/* ----------------------------- UI ----------------------------- */
+/* ----------------------------- UI chips ----------------------------- */
 
 $chips = [];
 foreach ([
@@ -603,8 +687,7 @@ foreach ([
           <div class="mt-2 d-flex flex-wrap gap-2">
             <?php foreach ($chips as $c): ?>
               <a class="badge rounded-pill text-bg-secondary-subtle border text-secondary-emphasis text-decoration-none"
-                 href="<?= eh(url_with([$c['k'] => null])) ?>"
-                 title="Remove filter">
+                 href="<?= eh(url_with([$c['k'] => null])) ?>" title="Remove filter">
                 <i class="bi bi-x-circle me-1"></i><?= eh($c['t']) ?>
               </a>
             <?php endforeach; ?>
@@ -691,7 +774,7 @@ foreach ([
 
           <div class="col-12 mt-2">
             <a class="text-decoration-none" data-bs-toggle="collapse" href="#advancedThresholds" role="button" aria-expanded="false" aria-controls="advancedThresholds">
-              <i class="bi bi-sliders me-1"></i>Thresholds (DECIMAL)
+              <i class="bi bi-sliders me-1"></i>Thresholds & Risk (DECIMAL)
             </a>
           </div>
           <div class="collapse" id="advancedThresholds">
@@ -707,6 +790,15 @@ foreach ([
               <div class="col-md-2">
                 <label class="form-label">Excellent</label>
                 <input type="number" step="0.1" name="excellent" min="0" max="40" class="form-control" value="<?= eh($excellentThreshold) ?>">
+              </div>
+              <div class="col-md-2">
+                <label class="form-label">Risk Min N</label>
+                <input type="number" name="risk_min_n" min="1" max="999" class="form-control" value="<?= eh($riskMinN) ?>">
+                <div class="form-text">Default: <?= (int)$defaultRiskMinN ?> for current filters.</div>
+              </div>
+              <div class="col-md-2">
+                <label class="form-label">Risk Pass%</label>
+                <input type="number" step="0.1" name="risk_pass_pct" min="0" max="100" class="form-control" value="<?= eh($riskPassPct) ?>">
               </div>
             </div>
           </div>
@@ -767,9 +859,7 @@ foreach ([
       <div class="card-body">
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
           <div class="fw-semibold"><i class="bi bi-journal-text me-2"></i>Subject summary</div>
-          <div class="small text-muted">
-            Lower mean often indicates higher difficulty; higher StdDev indicates more dispersion in scores.
-          </div>
+          <div class="small text-muted">Lower mean often indicates higher difficulty; higher StdDev indicates more dispersion.</div>
         </div>
 
         <?php if (!$subjectSummary): ?>
@@ -876,9 +966,14 @@ foreach ([
               </thead>
               <tbody>
                 <?php foreach ($topPupils as $r): ?>
-                  <tr>
+                  <tr class="pupil-row" role="button"
+                      data-pupil-id="<?= (int)$r['id'] ?>"
+                      data-pupil-label="<?= eh($r['surname'] . ' ' . $r['name']) ?>">
                     <td>
-                      <div class="fw-semibold"><?= eh($r['surname']) ?> <?= eh($r['name']) ?></div>
+                      <div class="fw-semibold">
+                        <i class="bi bi-person-lines-fill me-1 text-primary"></i>
+                        <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
+                      </div>
                       <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
                     </td>
                     <td><?= eh($r['class_code']) ?></td>
@@ -891,6 +986,7 @@ foreach ([
               </tbody>
             </table>
           </div>
+          <div class="small text-muted mt-2">Click a pupil row to view all scores.</div>
         <?php endif; ?>
       </div>
     </div>
@@ -899,12 +995,26 @@ foreach ([
   <div class="col-lg-6">
     <div class="card shadow-sm">
       <div class="card-body">
-        <div class="fw-semibold mb-2"><i class="bi bi-exclamation-triangle me-2"></i>At-risk pupils (heuristic)</div>
-        <div class="small text-muted mb-2">
-          Criteria: at least 2 results in slice AND (mean &lt; pass OR any 0 OR pass-rate &lt; 50%).
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
+          <div class="fw-semibold"><i class="bi bi-exclamation-triangle me-2"></i>At-risk pupils (heuristic)</div>
+          <span class="badge text-bg-light border">
+            Min N: <?= (int)$riskMinN ?> • Risk Pass%: <?= eh($riskPassPct) ?>
+          </span>
         </div>
+        <div class="small text-muted mb-2">
+          Criteria: N ≥ <?= (int)$riskMinN ?> AND (mean &lt; pass OR any 0 OR pass% &lt; <?= eh($riskPassPct) ?>).
+          <?php if ($filters['subject_id'] || $filters['exam_id']): ?>
+            <span class="text-muted">Note: subject/exam filter detected, default Min N becomes 1.</span>
+          <?php endif; ?>
+        </div>
+
         <?php if (!$atRisk): ?>
-          <div class="text-muted">No at-risk pupils detected under the current heuristic for this slice.</div>
+          <div class="alert alert-secondary mb-0">
+            <div class="fw-semibold">No at-risk pupils found for this slice.</div>
+            <div class="small text-muted mt-1">
+              If you selected one subject or one exam, set <span class="fw-semibold">Risk Min N</span> to 1.
+            </div>
+          </div>
         <?php else: ?>
           <div class="table-responsive">
             <table class="table table-sm table-striped align-middle mb-0">
@@ -921,14 +1031,23 @@ foreach ([
               <tbody>
                 <?php foreach ($atRisk as $r): ?>
                   <?php $mean = (float)$r['mean_score']; ?>
-                  <tr>
+                  <tr class="pupil-row" role="button"
+                      data-pupil-id="<?= (int)$r['id'] ?>"
+                      data-pupil-label="<?= eh($r['surname'] . ' ' . $r['name']) ?>">
                     <td>
-                      <div class="fw-semibold"><?= eh($r['surname']) ?> <?= eh($r['name']) ?></div>
+                      <div class="fw-semibold">
+                        <i class="bi bi-person-exclamation me-1 text-danger"></i>
+                        <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
+                      </div>
                       <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
                     </td>
                     <td><?= eh($r['class_code']) ?></td>
                     <td class="text-end"><?= (int)$r['n'] ?></td>
-                    <td class="text-end"><span class="badge <?= eh(badge_score_bucket($mean, $passThreshold, $goodThreshold, $excellentThreshold)) ?>"><?= number_format($mean, 2) ?></span></td>
+                    <td class="text-end">
+                      <span class="badge <?= eh(badge_score_bucket($mean, $passThreshold, $goodThreshold, $excellentThreshold)) ?>">
+                        <?= number_format($mean, 2) ?>
+                      </span>
+                    </td>
                     <td class="text-end"><?= pct((float)$r['pass_rate'], 1) ?></td>
                     <td class="text-end"><?= number_format((float)$r['min_score'], 2) ?></td>
                   </tr>
@@ -936,9 +1055,7 @@ foreach ([
               </tbody>
             </table>
           </div>
-          <div class="small text-muted mt-2">
-            Review zeros carefully (absent vs actual 0) to avoid misclassification.
-          </div>
+          <div class="small text-muted mt-2">Click a pupil row to view all scores (term-based if term filter is set).</div>
         <?php endif; ?>
       </div>
     </div>
@@ -983,13 +1100,182 @@ foreach ([
               </tbody>
             </table>
           </div>
-          <div class="small text-muted mt-2">
-            For best trend interpretation, fix Subject and Class (otherwise this mixes multiple skill domains).
-          </div>
+          <div class="small text-muted mt-2">For best trend interpretation, fix Subject and Class (otherwise this mixes multiple skill domains).</div>
         <?php endif; ?>
       </div>
     </div>
   </div>
 </div>
+
+<!-- Pupil Scores Modal -->
+<div class="modal fade" id="pupilScoresModal" tabindex="-1" aria-labelledby="pupilScoresModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="pupilScoresModalLabel">Pupil scores</h5>
+          <div class="small text-muted" id="pupilScoresModalSub">Loading...</div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <div class="modal-body">
+        <div id="pupilScoresLoading" class="d-flex align-items-center gap-2 text-muted">
+          <div class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></div>
+          <div>Loading scores...</div>
+        </div>
+
+        <div id="pupilScoresError" class="alert alert-danger d-none mb-0"></div>
+
+        <div id="pupilScoresContent" class="d-none">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped align-middle mb-0" id="pupilScoresTable">
+              <thead class="table-light">
+                <tr>
+                  <th>Exam</th>
+                  <th>Year</th>
+                  <th>Term</th>
+                  <th>Date</th>
+                  <th>Subject</th>
+                  <th class="text-end">Score</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="small text-muted mt-2">
+            Note: this modal shows <span class="fw-semibold">all subjects</span> for the selected pupil.
+            If Term filter is set, it shows that term only; otherwise all terms.
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">
+          <i class="bi bi-x-lg me-1"></i>Close
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const modalEl = document.getElementById('pupilScoresModal');
+  if (!modalEl) return;
+
+  const modal = new bootstrap.Modal(modalEl);
+  const titleEl = document.getElementById('pupilScoresModalLabel');
+  const subEl = document.getElementById('pupilScoresModalSub');
+
+  const loadingEl = document.getElementById('pupilScoresLoading');
+  const errorEl = document.getElementById('pupilScoresError');
+  const contentEl = document.getElementById('pupilScoresContent');
+  const tbody = document.querySelector('#pupilScoresTable tbody');
+
+  function setState(state, msg) {
+    loadingEl.classList.toggle('d-none', state !== 'loading');
+    errorEl.classList.toggle('d-none', state !== 'error');
+    contentEl.classList.toggle('d-none', state !== 'ready');
+
+    if (state === 'error') {
+      errorEl.textContent = msg || 'Failed to load.';
+    }
+  }
+
+  async function loadPupilScores(pupilId, label) {
+    titleEl.textContent = 'Scores: ' + (label || ('Pupil #' + pupilId));
+    subEl.textContent = 'Loading...';
+    tbody.innerHTML = '';
+    setState('loading');
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('ajax', 'pupil_scores');
+    url.searchParams.set('pupil_id', String(pupilId));
+
+    try {
+      const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
+      const data = await res.json();
+
+      if (!res.ok || !data || !data.ok) {
+        throw new Error((data && data.error) ? data.error : 'Request failed');
+      }
+
+      const p = data.pupil || {};
+      const scope = data.scope || {};
+      const rows = data.rows || [];
+
+      const who = [
+        (p.surname || '') + ' ' + (p.name || ''),
+        p.student_login ? ('(' + p.student_login + ')') : '',
+        p.class_code ? ('Class ' + p.class_code) : '',
+        p.track ? ('• ' + p.track) : ''
+      ].filter(Boolean).join(' ');
+
+      const scopeText = [
+        scope.academic_year ? ('Year ' + scope.academic_year) : null,
+        scope.term ? ('Term ' + scope.term) : 'All terms',
+        scope.exam_id ? ('Exam #' + scope.exam_id) : 'All exams'
+      ].filter(Boolean).join(' • ');
+
+      subEl.textContent = who + ' — ' + scopeText;
+
+      if (!rows.length) {
+        setState('error', 'No scores found for this pupil in the current scope.');
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+
+        const exam = document.createElement('td');
+        exam.className = 'fw-semibold';
+        exam.textContent = r.exam_name || ('Exam #' + r.exam_id);
+
+        const ay = document.createElement('td');
+        ay.textContent = r.academic_year || '';
+
+        const term = document.createElement('td');
+        term.textContent = r.term || '';
+
+        const date = document.createElement('td');
+        date.textContent = r.exam_date || '';
+
+        const subj = document.createElement('td');
+        subj.innerHTML = `<div class="fw-semibold">${escapeHtml(r.subject_name || '')}</div>
+                          <div class="small text-muted">${escapeHtml(r.subject_code || '')}</div>`;
+
+        const score = document.createElement('td');
+        score.className = 'text-end fw-semibold';
+        score.textContent = (r.score ?? '');
+
+        tr.append(exam, ay, term, date, subj, score);
+        frag.appendChild(tr);
+      }
+      tbody.appendChild(frag);
+      setState('ready');
+    } catch (e) {
+      setState('error', e && e.message ? e.message : 'Failed to load scores.');
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'
+    }[c]));
+  }
+
+  document.querySelectorAll('.pupil-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const pupilId = row.getAttribute('data-pupil-id');
+      const label = row.getAttribute('data-pupil-label') || '';
+      if (!pupilId) return;
+      modal.show();
+      loadPupilScores(pupilId, label);
+    });
+  });
+})();
+</script>
 
 <?php require __DIR__ . '/footer.php'; ?>

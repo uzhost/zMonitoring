@@ -1,0 +1,16 @@
+/* assets/admin.css — small admin UX polish */
+
+.navbar .nav-link.active {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.alert .bi {
+  margin-top: 0.1rem;
+}
+
+@media (min-width: 992px) {
+  main.container-fluid {
+    max-width: 1400px;
+  }
+}

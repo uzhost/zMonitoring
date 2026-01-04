@@ -1,16 +1,26 @@
 <?php
-// admin/header.php — Admin layout header (Bootstrap 5.3.8 CDN) + UX + CSP nonce
+// admin/header.php — Unified layout header (Bootstrap 5.3.8 CDN) + UX + CSP nonce
+// Supports guest pages by setting: $auth_required = false; $show_admin_nav = false;
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/auth.php';
 
 session_start_secure();
-require_admin(); // blocks non-admins
+
+// -------------------- Mode flags --------------------
+// Default: admin pages require auth and show admin navbar.
+$auth_required   = $auth_required   ?? true;
+$show_admin_nav  = $show_admin_nav  ?? true;
+
+if ($auth_required) {
+    require_admin(); // blocks non-admins
+}
 
 // -------------------- Page metadata --------------------
-$pageTitle = isset($page_title) && is_string($page_title) && $page_title !== '' ? $page_title : 'Admin';
-$adminLogin = (string)($_SESSION['admin_login'] ?? '');
+$pageTitle   = isset($page_title) && is_string($page_title) && $page_title !== '' ? $page_title : 'Admin';
+$adminLogin  = (string)($_SESSION['admin_login'] ?? '');
+$isGuest     = !$auth_required;
 
 // -------------------- Active nav helper --------------------
 $current = basename(parse_url((string)($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH) ?: '');
@@ -28,24 +38,25 @@ $flashes = [];
 if (!empty($_SESSION['flash']) && is_array($_SESSION['flash'])) {
     foreach ($_SESSION['flash'] as $f) {
         if (!is_array($f)) continue;
-        $type = in_array(($f['type'] ?? 'info'), ['success','danger','warning','info'], true) ? $f['type'] : 'info';
+        $type = in_array(($f['type'] ?? 'info'), ['success','danger','warning','info'], true) ? (string)$f['type'] : 'info';
         $msg  = (string)($f['msg'] ?? '');
         if ($msg !== '') $flashes[] = ['type' => $type, 'msg' => $msg];
     }
     unset($_SESSION['flash']);
 }
 
-// -------------------- CSP nonce (if your project supports CSP) --------------------
+// -------------------- CSP nonce --------------------
 if (empty($_SESSION['csp_nonce']) || !is_string($_SESSION['csp_nonce'])) {
     $_SESSION['csp_nonce'] = rtrim(strtr(base64_encode(random_bytes(16)), '+/', '-_'), '=');
 }
 $cspNonce = $_SESSION['csp_nonce'];
 
-// -------------------- Lightweight security headers (safe defaults) --------------------
+// -------------------- Lightweight security headers --------------------
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('X-Frame-Options: SAMEORIGIN');
 header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+
 ?>
 <!doctype html>
 <html lang="en">
@@ -57,20 +68,42 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
   <meta name="csp-nonce" content="<?= htmlspecialchars($cspNonce, ENT_QUOTES, 'UTF-8') ?>">
 
   <!-- Bootstrap 5.3.8 CSS -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous">
 
   <!-- Bootstrap Icons -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" rel="stylesheet">
 
   <!-- Custom admin styles -->
   <link href="/assets/admin.css" rel="stylesheet">
+
+  <?php if ($isGuest): ?>
+    <style>
+      body{
+        min-height:100vh;
+        background:
+          radial-gradient(1200px 600px at 20% 10%, rgba(13,110,253,.12), transparent 60%),
+          radial-gradient(900px 500px at 90% 90%, rgba(25,135,84,.10), transparent 60%),
+          #f8f9fa;
+      }
+      .login-shell{ min-height:100vh; }
+      .brand-badge{
+        width:52px;height:52px;display:inline-flex;align-items:center;justify-content:center;border-radius:16px;
+      }
+      .small-muted{ color: rgba(0,0,0,.55); }
+      .card{ border-radius:16px; }
+    </style>
+  <?php endif; ?>
 </head>
-<body class="bg-light">
+<body class="bg-light" id="top">
 
 <a class="visually-hidden-focusable position-absolute top-0 start-0 p-2 bg-white border rounded-2 m-2" href="#mainContent">
   Skip to content
 </a>
 
+<?php if ($show_admin_nav && !$isGuest): ?>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
   <div class="container-fluid">
     <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="dashboard.php">
@@ -121,10 +154,9 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
                 <i class="bi bi-journal-text me-2"></i> Results import
               </a>
             </li>
-            <li><hr class="dropdown-divider"></li>
             <li>
-              <a class="dropdown-item<?= $active('results_import.php') ?>" href="results_import.php">
-                <i class="bi bi-clipboard-data me-2"></i> Results import
+              <a class="dropdown-item<?= $active('subject_import.php') ?>" href="subject_import.php">
+                <i class="bi bi-book me-2"></i> Subjects import
               </a>
             </li>
           </ul>
@@ -158,8 +190,11 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
     </div>
   </div>
 </nav>
+<?php endif; ?>
 
-<main id="mainContent" class="container-fluid py-4">
+<main id="mainContent" class="<?= $isGuest ? 'container' : 'container-fluid' ?> py-4">
+
+<?php if (!$isGuest): ?>
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
     <div class="d-flex align-items-center gap-2">
       <h1 class="h4 mb-0"><?= htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8') ?></h1>
@@ -168,21 +203,21 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
       </span>
     </div>
 
-    <!-- Optional slot for page-level actions -->
     <?php if (!empty($page_actions) && is_string($page_actions)): ?>
       <div class="d-flex gap-2">
-        <?= $page_actions /* trusted HTML you set per-page; do NOT pass user input here */ ?>
+        <?= $page_actions /* trusted HTML */ ?>
       </div>
     <?php endif; ?>
   </div>
+<?php endif; ?>
 
-  <?php if ($flashes): ?>
-    <div class="mb-3">
-      <?php foreach ($flashes as $f): ?>
-        <div class="alert alert-<?= htmlspecialchars($f['type'], ENT_QUOTES, 'UTF-8') ?> d-flex align-items-start gap-2" role="alert">
-          <i class="bi bi-info-circle"></i>
-          <div><?= htmlspecialchars($f['msg'], ENT_QUOTES, 'UTF-8') ?></div>
-        </div>
-      <?php endforeach; ?>
-    </div>
-  <?php endif; ?>
+<?php if ($flashes): ?>
+  <div class="mb-3">
+    <?php foreach ($flashes as $f): ?>
+      <div class="alert alert-<?= htmlspecialchars($f['type'], ENT_QUOTES, 'UTF-8') ?> d-flex align-items-start gap-2" role="alert">
+        <i class="bi bi-info-circle"></i>
+        <div><?= htmlspecialchars($f['msg'], ENT_QUOTES, 'UTF-8') ?></div>
+      </div>
+    <?php endforeach; ?>
+  </div>
+<?php endif; ?>

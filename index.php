@@ -373,6 +373,8 @@ $year = (int)date('Y');
           Powered by
           <a href="https://uzhost.net" target="_blank" rel="noopener noreferrer" class="text-decoration-none fw-semibold">
             Uzhost
+          </a> & Created by <a href="https://MrShahzodbek.t.me" target="_blank" rel="noopener noreferrer" class="text-decoration-none fw-semibold">
+            MrShahzodbek
           </a>
         </div>
       </section>

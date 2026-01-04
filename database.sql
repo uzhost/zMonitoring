@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1:3311
--- Generation Time: Jan 03, 2026 at 09:49 PM
+-- Generation Time: Jan 04, 2026 at 09:08 PM
 -- Server version: 8.0.29
 -- PHP Version: 8.3.29
 
@@ -82,7 +82,7 @@ CREATE TABLE `results` (
   `pupil_id` int UNSIGNED NOT NULL,
   `subject_id` smallint UNSIGNED NOT NULL,
   `exam_id` int UNSIGNED NOT NULL,
-  `score` decimal(4,1) NOT NULL,
+  `score` decimal(4,2) NOT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ;
 
@@ -141,7 +141,9 @@ ALTER TABLE `pupils`
   ADD UNIQUE KEY `uq_pupils_student_login` (`student_login`),
   ADD KEY `idx_pupils_class_code` (`class_code`),
   ADD KEY `idx_pupils_track` (`track`),
-  ADD KEY `idx_pupils_surname_name` (`surname`,`name`);
+  ADD KEY `idx_pupils_surname_name` (`surname`,`name`),
+  ADD KEY `idx_pupils_class_id` (`class_code`,`id`),
+  ADD KEY `idx_pupils_track_class` (`track`,`class_code`);
 
 --
 -- Indexes for table `results`
@@ -151,7 +153,8 @@ ALTER TABLE `results`
   ADD UNIQUE KEY `uq_results_one` (`pupil_id`,`subject_id`,`exam_id`),
   ADD KEY `idx_results_exam_subject` (`exam_id`,`subject_id`),
   ADD KEY `idx_results_pupil_exam` (`pupil_id`,`exam_id`),
-  ADD KEY `fk_results_subject` (`subject_id`);
+  ADD KEY `fk_results_subject` (`subject_id`),
+  ADD KEY `idx_results_exam_pupil` (`exam_id`,`pupil_id`);
 
 --
 -- Indexes for table `subjects`

@@ -1,5 +1,5 @@
 <?php
-// results.php — Public student results viewer (by student_login), term-by-term + subject comparisons + analytics
+// results.php — Public student results viewer (bilingual UZ/EN)
 
 declare(strict_types=1);
 
@@ -19,15 +19,117 @@ header("Content-Security-Policy: default-src 'self' https:; img-src 'self' https
 // Very light rate limiting (per session)
 // -----------------------------
 session_start_secure();
+
 $now = time();
 $_SESSION['public_rl'] ??= [];
-$_SESSION['public_rl'] = array_values(array_filter($_SESSION['public_rl'], fn($t) => is_int($t) && ($now - $t) <= 600));
+$_SESSION['public_rl'] = array_values(array_filter(
+    $_SESSION['public_rl'],
+    fn($t) => is_int($t) && ($now - $t) <= 600
+));
 if (count($_SESSION['public_rl']) >= 60) {
     http_response_code(429);
     echo 'Too many requests. Please try again later.';
     exit;
 }
 $_SESSION['public_rl'][] = $now;
+
+// -----------------------------
+// Language (UZ / EN) — session + ?lang=
+// -----------------------------
+$supportedLangs = ['uz', 'en'];
+if (isset($_GET['lang']) && in_array($_GET['lang'], $supportedLangs, true)) {
+    $_SESSION['lang'] = $_GET['lang'];
+}
+$lang = $_SESSION['lang'] ?? 'uz'; // default Uzbek
+
+$T = [
+    'uz' => [
+        'page_title' => 'O‘quvchi natijalari',
+        'hero_title' => 'O‘quvchi natijalari sahifasi',
+        'hero_desc'  => 'O‘quvchi loginini kiriting va fanlar bo‘yicha natijalar, taqqoslash hamda rivojlanish dinamikasini ko‘ring.',
+        'student_results' => 'O‘quvchi natijalari',
+        'student_login' => 'O‘quvchi logini',
+        'placeholder_login' => 'masalan: 10A-023',
+        'view_results' => 'Natijalarni ko‘rish',
+        'enter_valid_login' => 'Iltimos, to‘g‘ri O‘quvchi loginini kiriting (2–20 belgi; harf/raqam/_/-/.)',
+        'student_not_found' => 'O‘quvchi topilmadi. Loginni tekshiring.',
+        'no_results_yet' => 'Bu o‘quvchi uchun hali natijalar mavjud emas.',
+        'student' => 'O‘quvchi',
+        'class' => 'Sinf',
+        'track' => 'Yo‘nalish',
+        'overall_trend' => 'Umumiy trend',
+        'latest_total' => 'So‘nggi umumiy ball',
+        'change' => 'O‘zgarish',
+        'score_colors' => 'Ball ranglari',
+        'subject_comparison_title' => 'Fanlar bo‘yicha taqqoslash (so‘nggi imtihon vs avvalgi)',
+        'subject_comparison_desc' => 'Har bir fan uchun so‘nggi ball va avvalgi imtihonga nisbatan o‘zgarish ko‘rsatiladi.',
+        'subject' => 'Fan',
+        'latest' => 'So‘nggi',
+        'delta_points' => 'Δ Ball',
+        'delta_percent' => 'Δ %',
+        'trend' => 'Trend',
+        'no_subject_data' => 'Fanlar bo‘yicha ma’lumot mavjud emas.',
+        'term_results_title' => 'Imtihonlar bo‘yicha natijalar',
+        'term_results_desc' => 'Har bir imtihon: fanlar kesimida ballar, jami va avvalgi imtihonga nisbatan o‘zgarish.',
+        'term_label' => 'Term',
+        'exam_total' => 'Imtihon jami',
+        'rank_in_class' => 'Sinfdagi o‘rni',
+        'class_avg' => 'Sinf o‘rtachasi',
+        'class_analytics' => 'Sinf tahlili',
+        'score' => 'Ball',
+        'delta_vs_previous' => 'Δ avvalgi bilan',
+        'no_subjects_for_exam' => 'Ushbu imtihon uchun fanlar topilmadi.',
+        'privacy_note' => 'Maxfiylik eslatmasi',
+        'privacy_text' => 'Bu sahifa ommaviy, ammo natijalarni ko‘rish uchun o‘quvchi logini talab qilinadi.',
+        'year_label' => 'Yil',
+    ],
+    'en' => [
+        'page_title' => 'Student Results',
+        'hero_title' => 'Student Results Viewer',
+        'hero_desc'  => 'Enter a student login to view subject scores, comparisons, and performance trends.',
+        'student_results' => "Student's Results",
+        'student_login' => 'Student Login',
+        'placeholder_login' => 'e.g., 10A-023',
+        'view_results' => 'View results',
+        'enter_valid_login' => 'Please enter a valid Student Login (2–20 chars; letters, digits, underscore, dash, dot).',
+        'student_not_found' => 'Student not found. Please check the Student Login.',
+        'no_results_yet' => 'No results found for this student yet.',
+        'student' => 'Student',
+        'class' => 'Class',
+        'track' => 'Track',
+        'overall_trend' => 'Overall trend',
+        'latest_total' => 'Latest total',
+        'change' => 'Change',
+        'score_colors' => 'Score colors',
+        'subject_comparison_title' => 'Subject-by-subject comparison (latest vs previous)',
+        'subject_comparison_desc' => 'Shows the latest score and the delta from the previous exam where that subject exists.',
+        'subject' => 'Subject',
+        'latest' => 'Latest',
+        'delta_points' => 'Δ Points',
+        'delta_percent' => 'Δ %',
+        'trend' => 'Trend',
+        'no_subject_data' => 'No subject data available.',
+        'term_results_title' => 'Term-by-term results',
+        'term_results_desc' => 'Each exam shows subject scores, totals, and change from the previous exam.',
+        'term_label' => 'Term',
+        'exam_total' => 'Exam total',
+        'rank_in_class' => 'Rank in class',
+        'class_avg' => 'Class avg',
+        'class_analytics' => 'Class analytics',
+        'score' => 'Score',
+        'delta_vs_previous' => 'Δ vs previous',
+        'no_subjects_for_exam' => 'No subjects found for this exam.',
+        'privacy_note' => 'Privacy note',
+        'privacy_text' => 'This page is public but requires the student login to view results.',
+        'year_label' => 'Year',
+    ],
+];
+
+function t(string $key): string
+{
+    global $T, $lang;
+    return $T[$lang][$key] ?? $key;
+}
 
 // -----------------------------
 // Helpers
@@ -66,7 +168,6 @@ function delta_badge(float $delta): array
 
 function fmt1(float $v): string
 {
-    // one decimal, but drop .0 for cleaner display if desired
     $s = number_format($v, 1, '.', '');
     return str_ends_with($s, '.0') ? substr($s, 0, -2) : $s;
 }
@@ -103,7 +204,6 @@ function sparkline_svg(array $values, int $w = 140, int $h = 34): string
     $trendUp = $last > $first + 0.0001;
 
     $stroke = $trendUp ? '#198754' : ($last < $first - 0.0001 ? '#dc3545' : '#6c757d');
-    // inline styles are allowed via CSP above; if you tighten CSP, move to CSS.
     return '<svg width="'.$w.'" height="'.$h.'" viewBox="0 0 '.$w.' '.$h.'" aria-hidden="true">'
         . '<polyline fill="none" stroke="'.$stroke.'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="'.h(implode(' ', $pts)).'"></polyline>'
         . '</svg>';
@@ -131,7 +231,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $searched = true;
     $student_login = norm_login((string)($_POST['student_login'] ?? ''));
     if (!valid_login($student_login)) {
-        $error = 'Please enter a valid Student Login (2–20 chars; letters, digits, underscore, dash, dot).';
+        $error = t('enter_valid_login');
     } else {
         $stmt = $pdo->prepare("
             SELECT id, surname, name, middle_name, class_code, track, student_login
@@ -143,7 +243,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         $pupil = $stmt->fetch() ?: null;
 
         if (!$pupil) {
-            $error = 'Student not found. Please check the Student Login.';
+            $error = t('student_not_found');
         }
     }
 }
@@ -159,7 +259,6 @@ $totalsSeries = [];      // list totals aligned to timeline
 $classStatsByExam = [];  // exam_id => ['rank'=>int|null,'count'=>int,'avg_total'=>float|null]
 
 if ($pupil) {
-    // Pull all rows for this pupil with exam + subject details
     $stmt = $pdo->prepare("
         SELECT
             r.exam_id,
@@ -181,7 +280,6 @@ if ($pupil) {
     $stmt->execute([(int)$pupil['id']]);
     $rows = $stmt->fetchAll();
 
-    // Build structures
     foreach ($rows as $r) {
         $examId = (int)$r['exam_id'];
         $subId  = (int)$r['subject_id'];
@@ -201,7 +299,7 @@ if ($pupil) {
                     'academic_year' => (string)$r['academic_year'],
                     'term' => $r['term'] !== null ? (int)$r['term'] : null,
                     'exam_name' => (string)$r['exam_name'],
-                    'exam_date' => $r['exam_date'], // string or null
+                    'exam_date' => $r['exam_date'],
                 ],
                 'subjects' => [],
                 'total' => 0.0,
@@ -217,10 +315,8 @@ if ($pupil) {
         $byExam[$examId]['total'] += $score;
     }
 
-    // Timeline (ordered exams)
     $timeline = array_values(array_map(fn($x) => $x['exam'], $byExam));
 
-    // Subject series (aligned to timeline; compute deltas per subject)
     $prevBySubject = [];
     foreach ($timeline as $ex) {
         $examId = (int)$ex['id'];
@@ -229,9 +325,8 @@ if ($pupil) {
         foreach ($subjectsIndex as $sid => $sMeta) {
             $sid = (int)$sid;
             $score = isset($byExam[$examId]['subjects'][$sid]) ? (float)$byExam[$examId]['subjects'][$sid]['score'] : null;
-            if ($score === null) {
-                continue; // skip missing subjects in this exam
-            }
+            if ($score === null) continue;
+
             $prev = $prevBySubject[$sid] ?? null;
             $delta = ($prev === null) ? 0.0 : ($score - $prev);
             $subjectSeries[$sid][] = [
@@ -243,8 +338,7 @@ if ($pupil) {
         }
     }
 
-    // Class rank + class average total (per exam) within pupil's class_code
-    // Uses MySQL 8 window functions.
+    // Class rank + class average total (per exam)
     $rankStmt = $pdo->prepare("
         WITH totals AS (
             SELECT
@@ -282,7 +376,6 @@ if ($pupil) {
                 'avg_total' => $st ? (float)$st['avg_total'] : null,
             ];
         } catch (Throwable $e) {
-            // If window functions / CTE disabled for any reason, fail gracefully.
             $classStatsByExam[$examId] = ['rank' => null, 'count' => 0, 'avg_total' => null];
         }
     }
@@ -291,11 +384,12 @@ if ($pupil) {
 // -----------------------------
 // Rendering
 // -----------------------------
-$pageTitle = 'Student Results';
+$pageTitle = t('page_title');
 
+$langParam = '?lang=' . urlencode($lang);
 ?>
 <!doctype html>
-<html lang="en">
+<html lang="<?= h($lang) ?>">
 <head>
   <meta charset="utf-8">
   <title><?= h($pageTitle) ?></title>
@@ -324,13 +418,18 @@ $pageTitle = 'Student Results';
   <div class="container">
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
       <div>
-        <h1 class="h3 mb-1">Student Results Viewer</h1>
-        <div class="small-muted">Enter a student login to view term-by-term performance, subject comparisons, and trends.</div>
+        <h1 class="h3 mb-1"><?= h(t('hero_title')) ?></h1>
+        <div class="small-muted"><?= h(t('hero_desc')) ?></div>
       </div>
 
-      <div class="text-end">
-        <a class="btn btn-outline-secondary" href="">
-          <i class="bi bi-shield-lock me-1"></i> Student's Results
+      <div class="d-flex align-items-center gap-2">
+        <div class="btn-group" role="group" aria-label="Language switch">
+          <a href="?lang=uz" class="btn btn-sm <?= $lang === 'uz' ? 'btn-primary' : 'btn-outline-secondary' ?>">UZ</a>
+          <a href="?lang=en" class="btn btn-sm <?= $lang === 'en' ? 'btn-primary' : 'btn-outline-secondary' ?>">EN</a>
+        </div>
+
+        <a class="btn btn-outline-secondary" href="<?= h('/results.php' . $langParam) ?>">
+          <i class="bi bi-shield-lock me-1"></i> <?= h(t('student_results')) ?>
         </a>
       </div>
     </div>
@@ -338,16 +437,24 @@ $pageTitle = 'Student Results';
     <div class="mt-3">
       <form method="post" class="row g-2 align-items-center">
         <input type="hidden" name="csrf" value="<?= h(csrf_token()) ?>">
+
         <div class="col-sm-7 col-md-5 col-lg-4">
-          <label class="form-label mb-1">Student Login</label>
+          <label class="form-label mb-1"><?= h(t('student_login')) ?></label>
           <div class="input-group">
             <span class="input-group-text"><i class="bi bi-person-badge"></i></span>
-            <input class="form-control" name="student_login" value="<?= h($student_login) ?>" placeholder="e.g., 10A-023" maxlength="20" autocomplete="off" required>
+            <input class="form-control"
+                   name="student_login"
+                   value="<?= h($student_login) ?>"
+                   placeholder="<?= h(t('placeholder_login')) ?>"
+                   maxlength="20"
+                   autocomplete="off"
+                   required>
           </div>
         </div>
+
         <div class="col-sm-auto pt-sm-4">
           <button class="btn btn-primary">
-            <i class="bi bi-search me-1"></i> View results
+            <i class="bi bi-search me-1"></i> <?= h(t('view_results')) ?>
           </button>
         </div>
       </form>
@@ -358,7 +465,7 @@ $pageTitle = 'Student Results';
         </div>
       <?php elseif ($searched && $pupil && empty($timeline)): ?>
         <div class="alert alert-warning mt-3 mb-0">
-          <i class="bi bi-info-circle me-1"></i>No results found for this student yet.
+          <i class="bi bi-info-circle me-1"></i><?= h(t('no_results_yet')) ?>
         </div>
       <?php endif; ?>
     </div>
@@ -382,58 +489,62 @@ $pageTitle = 'Student Results';
     <div class="col-lg-4">
       <div class="card shadow-sm sticky-top sticky-top-2">
         <div class="card-body">
-            <div class="border rounded-3 p-3 mb-3 bg-white">
-            
-          <div class="d-flex align-items-start justify-content-between gap-2">
-            <div>
-              <div class="text-uppercase small text-secondary">Student</div>
-              <div class="h5 mb-1"><?= h($fullName) ?></div>
-              <div class="small-muted">
-                <span class="me-2"><i class="bi bi-mortarboard me-1"></i><?= h($pupil['class_code']) ?></span>
-                <span><i class="bi bi-diagram-3 me-1"></i><?= h($pupil['track']) ?></span>
-              </div>
-              <div class="mt-2 small">
-                <span class="badge text-bg-light border"><i class="bi bi-key me-1"></i><?= h($pupil['student_login']) ?></span>
-              </div>
-            </div>
-            <div class="text-end">
-              <div class="text-uppercase small text-secondary">Overall trend</div>
-              <div class="spark mt-1"><?= sparkline_svg($allTotals, 150, 38) ?></div>
-            </div>
-          </div>
+          <div class="border rounded-3 p-3 mb-3 bg-white">
 
-          <hr class="my-3">
-
-          <div class="row g-2">
-            <div class="col-6">
-              <div class="kpi rounded-3 p-2 bg-white">
-                <div class="small text-secondary">Latest total</div>
-                <div class="h4 mb-0 mono"><?= h(fmt1($latestTotal)) ?></div>
-              </div>
-            </div>
-            <div class="col-6">
-              <div class="kpi rounded-3 p-2 bg-white">
-                <div class="small text-secondary">Change</div>
-                <div class="d-flex align-items-center gap-2">
-                  <span class="badge <?= h($dClass) ?> mono">
-                    <i class="bi <?= h($dIcon) ?> me-1"></i><?= h(fmt1($totalDelta)) ?>
-                  </span>
-                  <?php if ($totalPct !== null): ?>
-                    <span class="small-muted mono"><?= h(number_format($totalPct, 1)) ?>%</span>
-                  <?php else: ?>
-                    <span class="small-muted">—</span>
-                  <?php endif; ?>
+            <div class="d-flex align-items-start justify-content-between gap-2">
+              <div>
+                <div class="text-uppercase small text-secondary"><?= h(t('student')) ?></div>
+                <div class="h5 mb-1"><?= h($fullName) ?></div>
+                <div class="small-muted">
+                  <span class="me-2"><i class="bi bi-mortarboard me-1"></i><?= h($pupil['class_code']) ?></span>
+                  <span><i class="bi bi-diagram-3 me-1"></i><?= h((string)$pupil['track']) ?></span>
+                </div>
+                <div class="mt-2 small">
+                  <span class="badge text-bg-light border"><i class="bi bi-key me-1"></i><?= h($pupil['student_login']) ?></span>
                 </div>
               </div>
+
+              <div class="text-end">
+                <div class="text-uppercase small text-secondary"><?= h(t('overall_trend')) ?></div>
+                <div class="spark mt-1"><?= sparkline_svg($allTotals, 150, 38) ?></div>
               </div>
             </div>
+
+            <hr class="my-3">
+
+            <div class="row g-2">
+              <div class="col-6">
+                <div class="kpi rounded-3 p-2 bg-white">
+                  <div class="small text-secondary"><?= h(t('latest_total')) ?></div>
+                  <div class="h4 mb-0 mono"><?= h(fmt1($latestTotal)) ?></div>
+                </div>
+              </div>
+
+              <div class="col-6">
+                <div class="kpi rounded-3 p-2 bg-white">
+                  <div class="small text-secondary"><?= h(t('change')) ?></div>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="badge <?= h($dClass) ?> mono">
+                      <i class="bi <?= h($dIcon) ?> me-1"></i><?= h(fmt1($totalDelta)) ?>
+                    </span>
+                    <?php if ($totalPct !== null): ?>
+                      <span class="small-muted mono"><?= h(number_format($totalPct, 1)) ?>%</span>
+                    <?php else: ?>
+                      <span class="small-muted">—</span>
+                    <?php endif; ?>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
 
           <div class="mt-3 small-muted">
             <i class="bi bi-info-circle me-1"></i>
-            Score colors: <span class="badge text-bg-danger"><46%</span>
-            <span class="badge text-bg-warning text-dark"><66%</span>
-            <span class="badge text-bg-primary text-white"><86%</span>
+            <?= h(t('score_colors')) ?>:
+            <span class="badge text-bg-danger">&lt;46%</span>
+            <span class="badge text-bg-warning text-dark">&lt;66%</span>
+            <span class="badge text-bg-primary text-white">&lt;86%</span>
             <span class="badge text-bg-success">≥86%</span>
           </div>
 
@@ -446,75 +557,74 @@ $pageTitle = 'Student Results';
       <div class="card shadow-sm mb-3">
         <div class="card-header bg-white">
           <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-            <div class="fw-semibold"><i class="bi bi-bar-chart-line me-1"></i>Subject-by-subject comparison (latest vs previous)</div>
-            <div class="small-muted">Shows last score and the delta from the previous exam where that subject exists.</div>
+            <div class="fw-semibold"><i class="bi bi-bar-chart-line me-1"></i><?= h(t('subject_comparison_title')) ?></div>
+            <div class="small-muted"><?= h(t('subject_comparison_desc')) ?></div>
           </div>
         </div>
-        <div class="card-body ">
+        <div class="card-body">
           <div class="table-responsive">
-              <div class="border rounded-3 p-3 mb-3 bg-white">
-            <table class="table table-sm align-middle mb-0">
-              <thead class="table-light">
-                <tr>
-                  <th>Subject</th>
-                  <th class="text-center">Latest</th>
-                  <th class="text-center">Δ Points</th>
-                  <th class="text-center">Δ %</th>
-                  <th class="text-center">Trend</th>
-                </tr>
-              </thead>
-              <tbody>
-              <?php
-                // Rank subjects by absolute change (latest delta)
-                $subjectRows = [];
-                foreach ($subjectSeries as $sid => $series) {
-                    $n = count($series);
-                    if ($n === 0) continue;
-                    $last = $series[$n-1];
-                    $delta = (float)$last['delta'];
-                    $prevScore = $n >= 2 ? (float)$series[$n-2]['score'] : 0.0;
-                    $pct = ($n >= 2) ? pct_change($prevScore, $delta) : null;
-
-                    $vals = array_map(fn($x) => (float)$x['score'], $series);
-                    $subjectRows[] = [
-                        'sid' => (int)$sid,
-                        'name' => (string)$subjectsIndex[(int)$sid]['name'],
-                        'latest' => (float)$last['score'],
-                        'delta' => $delta,
-                        'pct' => $pct,
-                        'spark' => $vals,
-                    ];
-                }
-                usort($subjectRows, fn($a, $b) => abs($b['delta']) <=> abs($a['delta']));
-              ?>
-
-              <?php foreach ($subjectRows as $sr): ?>
+            <div class="border rounded-3 p-3 mb-3 bg-white">
+              <table class="table table-sm align-middle mb-0">
+                <thead class="table-light">
+                  <tr>
+                    <th><?= h(t('subject')) ?></th>
+                    <th class="text-center"><?= h(t('latest')) ?></th>
+                    <th class="text-center"><?= h(t('delta_points')) ?></th>
+                    <th class="text-center"><?= h(t('delta_percent')) ?></th>
+                    <th class="text-center"><?= h(t('trend')) ?></th>
+                  </tr>
+                </thead>
+                <tbody>
                 <?php
-                  [$cls, $ic, $lbl] = delta_badge((float)$sr['delta']);
-                  $pctTxt = $sr['pct'] === null ? '—' : (number_format((float)$sr['pct'], 1) . '%');
-                ?>
-                <tr>
-                  <td class="fw-semibold"><?= h($sr['name']) ?></td>
-                  <td class="text-center">
-                    <span class="badge <?= h(score_class((float)$sr['latest'])) ?> score-pill mono">
-                      <?= h(fmt1((float)$sr['latest'])) ?>
-                    </span>
-                  </td>
-                  <td class="text-center">
-                    <span class="badge <?= h($cls) ?> mono">
-                      <i class="bi <?= h($ic) ?> me-1"></i><?= h(fmt1((float)$sr['delta'])) ?>
-                    </span>
-                  </td>
-                  <td class="text-center mono"><?= h($pctTxt) ?></td>
-                  <td class="text-center spark"><?= sparkline_svg($sr['spark'], 140, 34) ?></td>
-                </tr>
-              <?php endforeach; ?>
+                  $subjectRows = [];
+                  foreach ($subjectSeries as $sid => $series) {
+                      $n = count($series);
+                      if ($n === 0) continue;
+                      $last = $series[$n-1];
+                      $delta = (float)$last['delta'];
+                      $prevScore = $n >= 2 ? (float)$series[$n-2]['score'] : 0.0;
+                      $pct = ($n >= 2) ? pct_change($prevScore, $delta) : null;
 
-              <?php if (empty($subjectRows)): ?>
-                <tr><td colspan="5" class="text-center text-secondary py-4">No subject data available.</td></tr>
-              <?php endif; ?>
-              </tbody>
-            </table>
+                      $vals = array_map(fn($x) => (float)$x['score'], $series);
+                      $subjectRows[] = [
+                          'sid' => (int)$sid,
+                          'name' => (string)$subjectsIndex[(int)$sid]['name'],
+                          'latest' => (float)$last['score'],
+                          'delta' => $delta,
+                          'pct' => $pct,
+                          'spark' => $vals,
+                      ];
+                  }
+                  usort($subjectRows, fn($a, $b) => abs($b['delta']) <=> abs($a['delta']));
+                ?>
+
+                <?php foreach ($subjectRows as $sr): ?>
+                  <?php
+                    [$cls, $ic, $lbl] = delta_badge((float)$sr['delta']);
+                    $pctTxt = $sr['pct'] === null ? '—' : (number_format((float)$sr['pct'], 1) . '%');
+                  ?>
+                  <tr>
+                    <td class="fw-semibold"><?= h($sr['name']) ?></td>
+                    <td class="text-center">
+                      <span class="badge <?= h(score_class((float)$sr['latest'])) ?> score-pill mono">
+                        <?= h(fmt1((float)$sr['latest'])) ?>
+                      </span>
+                    </td>
+                    <td class="text-center">
+                      <span class="badge <?= h($cls) ?> mono">
+                        <i class="bi <?= h($ic) ?> me-1"></i><?= h(fmt1((float)$sr['delta'])) ?>
+                      </span>
+                    </td>
+                    <td class="text-center mono"><?= h($pctTxt) ?></td>
+                    <td class="text-center spark"><?= sparkline_svg($sr['spark'], 140, 34) ?></td>
+                  </tr>
+                <?php endforeach; ?>
+
+                <?php if (empty($subjectRows)): ?>
+                  <tr><td colspan="5" class="text-center text-secondary py-4"><?= h(t('no_subject_data')) ?></td></tr>
+                <?php endif; ?>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -524,8 +634,8 @@ $pageTitle = 'Student Results';
       <div class="card shadow-sm">
         <div class="card-header bg-white">
           <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
-            <div class="fw-semibold"><i class="bi bi-journal-text me-1"></i>Term-by-term results</div>
-            <div class="small-muted">Each exam shows subject scores, totals, and change from the previous exam.</div>
+            <div class="fw-semibold"><i class="bi bi-journal-text me-1"></i><?= h(t('term_results_title')) ?></div>
+            <div class="small-muted"><?= h(t('term_results_desc')) ?></div>
           </div>
         </div>
 
@@ -540,7 +650,11 @@ $pageTitle = 'Student Results';
               $prevTotal = $total;
 
               [$tCls, $tIc, $tLbl] = delta_badge($deltaTotal);
-              $termLabel = $ex['term'] ? ('Term '.$ex['term']) : 'Term —';
+
+              $termLabel = ($ex['term'] !== null)
+                ? (t('term_label') . ' ' . (int)$ex['term'])
+                : (t('term_label') . ' —');
+
               $dateLabel = $ex['exam_date'] ? $ex['exam_date'] : '—';
               $classStats = $classStatsByExam[$examId] ?? ['rank'=>null,'count'=>0,'avg_total'=>null];
           ?>
@@ -557,7 +671,7 @@ $pageTitle = 'Student Results';
                 </div>
 
                 <div class="text-end">
-                  <div class="small text-secondary">Exam total</div>
+                  <div class="small text-secondary"><?= h(t('exam_total')) ?></div>
                   <div class="d-flex align-items-center justify-content-end gap-2">
                     <span class="badge text-bg-dark mono"><?= h(fmt1($total)) ?></span>
                     <span class="badge <?= h($tCls) ?> mono">
@@ -567,15 +681,16 @@ $pageTitle = 'Student Results';
                       <?= $pctTotal === null ? '—' : h(number_format($pctTotal, 1)).'%' ?>
                     </span>
                   </div>
+
                   <div class="small-muted mt-1">
                     <?php if ($classStats['rank'] !== null && (int)$classStats['count'] > 0): ?>
-                      <i class="bi bi-trophy me-1"></i>Rank in class:
+                      <i class="bi bi-trophy me-1"></i><?= h(t('rank_in_class')) ?>:
                       <span class="fw-semibold"><?= h((string)$classStats['rank']) ?></span> / <?= h((string)$classStats['count']) ?>
                       <?php if ($classStats['avg_total'] !== null): ?>
-                        · Class avg: <span class="mono"><?= h(fmt1((float)$classStats['avg_total'])) ?></span>
+                        · <?= h(t('class_avg')) ?>: <span class="mono"><?= h(fmt1((float)$classStats['avg_total'])) ?></span>
                       <?php endif; ?>
                     <?php else: ?>
-                      <i class="bi bi-people me-1"></i>Class analytics: —
+                      <i class="bi bi-people me-1"></i><?= h(t('class_analytics')) ?>: —
                     <?php endif; ?>
                   </div>
                 </div>
@@ -585,18 +700,16 @@ $pageTitle = 'Student Results';
                 <table class="table table-sm align-middle mb-0">
                   <thead class="table-light">
                     <tr>
-                      <th>Subject</th>
-                      <th class="text-center">Score</th>
-                      <th class="text-center">Δ vs previous</th>
-                      <th class="text-center">Δ %</th>
+                      <th><?= h(t('subject')) ?></th>
+                      <th class="text-center"><?= h(t('score')) ?></th>
+                      <th class="text-center"><?= h(t('delta_vs_previous')) ?></th>
+                      <th class="text-center"><?= h(t('delta_percent')) ?></th>
                     </tr>
                   </thead>
                   <tbody>
                     <?php
-                      // compute per-subject delta vs previous exam (same subject)
                       $prevExamId = $idx > 0 ? (int)$timeline[$idx-1]['id'] : null;
 
-                      // stable subject ordering by subject name
                       $subs = $byExam[$examId]['subjects'];
                       uasort($subs, fn($a, $b) => strcmp((string)$a['subject_name'], (string)$b['subject_name']));
 
@@ -627,7 +740,7 @@ $pageTitle = 'Student Results';
                     <?php endforeach; ?>
 
                     <?php if (empty($subs)): ?>
-                      <tr><td colspan="4" class="text-center text-secondary py-3">No subjects found for this exam.</td></tr>
+                      <tr><td colspan="4" class="text-center text-secondary py-3"><?= h(t('no_subjects_for_exam')) ?></td></tr>
                     <?php endif; ?>
                   </tbody>
                 </table>
@@ -639,10 +752,8 @@ $pageTitle = 'Student Results';
             <div class="d-flex gap-2">
               <div class="pt-1"><i class="bi bi-shield-check"></i></div>
               <div>
-                <div class="fw-semibold">Privacy note</div>
-                <div class="small text-secondary mb-0">
-                  This page is public but requires the student login to view results.
-                </div>
+                <div class="fw-semibold"><?= h(t('privacy_note')) ?></div>
+                <div class="small text-secondary mb-0"><?= h(t('privacy_text')) ?></div>
               </div>
             </div>
           </div>

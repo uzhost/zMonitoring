@@ -1,5 +1,5 @@
 <?php
-// results2.php — Public Student Results (No Login): Trends + Charts + Rank in class & parallels (grade-wide by track)
+// results.php — Public Student Results (No Login): Trends + Charts + Rank in class & parallels (grade-wide by track)
 
 declare(strict_types=1);
 
@@ -441,6 +441,64 @@ try {
   $timeline = [];
 }
 
+/// -----------------------------
+// NEW: pick up to 4 exams for subject-by-subject comparison
+// Default: last 4 exams (chronological). If fewer exist, use all.
+// -----------------------------
+$cmpExams = [];
+$cmpLabels = [];
+$cmpExamIds = [];
+
+$timelineCount = count($timeline);
+if ($timelineCount > 0) {
+  $sliceStart = max(0, $timelineCount - 4);
+  $cmpExams = array_slice($timeline, $sliceStart, 4); // chronological order
+}
+
+foreach ($cmpExams as $ex) {
+  $eid = (int)$ex['id'];
+  $cmpExamIds[] = $eid;
+
+  $term = $ex['term'] ? ('T'.$ex['term']) : 'T-';
+  $cmpLabels[] =
+    $ex['academic_year'].' · '.$term.' · '.(($ex['exam_name'] ?? '') !== '' ? $ex['exam_name'] : 'Exam')
+    .' · '.(($ex['exam_date'] ?? '') !== '' ? $ex['exam_date'] : '—');
+}
+
+// Build subject lists in stable order (by name)
+$cmpSubjects = array_values($subjectsIndex);
+usort($cmpSubjects, static fn($a, $b) => strcmp((string)$a['name'], (string)$b['name']));
+
+$cmpSubLabels = [];
+$cmpDatasets = []; // array of arrays: each exam => scores aligned to subjects
+foreach ($cmpExamIds as $eid) $cmpDatasets[(string)$eid] = [];
+
+foreach ($cmpSubjects as $s) {
+  $sid = (int)$s['id'];
+  $cmpSubLabels[] = (string)$s['name'];
+
+  foreach ($cmpExamIds as $eid) {
+    $v = null;
+    if (isset($byExam[$eid]['subjects'][$sid])) {
+      $v = (float)$byExam[$eid]['subjects'][$sid]['score'];
+    }
+    // Use nulls so Chart.js skips missing bars rather than showing 0
+    $cmpDatasets[(string)$eid][] = ($v === null ? null : (float)$v);
+  }
+}
+
+// Suggested max (keeps chart readable and consistent)
+$cmpSuggestedMax = 40;
+if (!empty($cmpSubjects)) {
+  $m = 0;
+  foreach ($cmpSubjects as $s) {
+    $m = max($m, (int)($s['max_points'] ?? 40));
+  }
+  $cmpSuggestedMax = max(40, $m);
+}
+
+
+
 // -----------------------------
 // Render
 // -----------------------------
@@ -456,6 +514,7 @@ $pageTitle = 'Student Results (Public)';
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css" rel="stylesheet">
+  <noscript><style>[data-aos]{opacity:1 !important; transform:none !important;}</style></noscript>
 
   <style>
     body { background: #f6f7fb; }
@@ -633,7 +692,7 @@ $pageTitle = 'Student Results (Public)';
       if (abs($v) < 0.0001) return 'rgba(108,117,125,1)';
       return $v > 0 ? 'rgba(25,135,84,1)' : 'rgba(220,53,69,1)';
     }, $deltaValues);
-
+    
     $clsLatest = $classStatsByExam[$latestExamId] ?? ['rank'=>null,'count'=>0,'avg_total'=>null];
     $parLatest = $parallelStatsByExam[$latestExamId] ?? ['rank'=>null,'count'=>0,'avg_total'=>null,'grade'=>$grade,'track'=>$track];
   ?>
@@ -761,44 +820,98 @@ $pageTitle = 'Student Results (Public)';
     <div class="col-lg-8">
 
       <div class="row g-3">
-        <div class="col-12">
-          <div class="card shadow-soft" data-aos="fade-up">
-            <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
-              <div class="fw-semibold"><i class="bi bi-graph-up-arrow me-1"></i>Performance trend (Total)</div>
-              <div class="small-muted">Chronological trend across exams</div>
-            </div>
-            <div class="card-body">
-             <div class="border rounded-3 p-3 mb-3 bg-white shadow-soft" data-aos="zoom-in">
-              <div class="chart-wrap">
-                <canvas id="totalsChart"></canvas>
+      <div class="col-12">
+        <div class="card shadow-soft" data-aos="fade-up">
+    
+          <div class="card-header bg-white">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div class="fw-semibold">
+                <i class="bi bi-graph-up-arrow me-1"></i>
+                Performance overview
               </div>
-              <div class="small text-secondary mt-2">
-                Interpretation: A steady upward slope suggests improvement; sharp drops may indicate gaps or exam difficulty shifts.
-              </div>
-             </div>
+              <div class="small-muted">Trend across exams & latest subject-level changes</div>
             </div>
           </div>
-        </div>
-
-        <div class="col-12">
-          <div class="card shadow-soft" data-aos="fade-up">
-            <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
-              <div class="fw-semibold"><i class="bi bi-bar-chart-line me-1"></i>Latest changes by subject</div>
-              <div class="small-muted">Δ points vs previous exam (where available)</div>
-            </div>
-            <div class="card-body">
-             <div class="border rounded-3 p-3 mb-3 bg-white shadow-soft" data-aos="zoom-in">
-              <div class="chart-wrap-sm">
-                <canvas id="deltaChart"></canvas>
+    
+          <div class="card-body">
+            <!-- SIDE-BY-SIDE ROW -->
+            <div class="row g-3 align-items-stretch">
+    
+              <!-- LEFT: TOTAL TREND -->
+              <div class="col-12 col-lg-5">
+                <div class="border rounded-3 p-3 bg-white shadow-soft h-100" data-aos="zoom-in">
+                  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-1">
+                    <div class="fw-semibold">
+                      <i class="bi bi-graph-up-arrow me-1"></i>Performance trend (Total)
+                    </div>
+                    <div class="small-muted">Chronological trend</div>
+                  </div>
+    
+                  <div class="chart-wrap" style="height: 240px;">
+                    <canvas id="totalsChart"></canvas>
+                  </div>
+    
+                  <div class="small text-secondary mt-2">
+                    Interpretation: A steady upward slope suggests improvement; sharp drops may indicate gaps or exam difficulty shifts.
+                  </div>
+                </div>
               </div>
-              <div class="small text-secondary mt-2">
-                Use this to immediately see which subjects improved and which require attention.
+    
+              <!-- RIGHT: SUBJECT DELTAS -->
+              <div class="col-12 col-lg-7">
+                <div class="border rounded-3 p-3 bg-white shadow-soft h-100" data-aos="zoom-in">
+                  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-1">
+                    <div class="fw-semibold">
+                      <i class="bi bi-bar-chart-line me-1"></i>Latest changes by subject
+                    </div>
+                    <div class="small-muted">Δ vs previous exam</div>
+                  </div>
+    
+                  <div class="chart-wrap-sm" style="height: 240px;">
+                    <canvas id="deltaChart"></canvas>
+                  </div>
+    
+                  <div class="small text-secondary mt-2">
+                    Use this to immediately see which subjects improved and which require attention.
+                  </div>
+                </div>
               </div>
-             </div>
-            </div>
-          </div>
+    
+            </div><!-- /row -->
+          </div><!-- /card-body -->
+    
         </div>
       </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="card shadow-soft" data-aos="fade-up">
+      <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <div class="fw-semibold">
+          <i class="bi bi-columns-gap me-1"></i>Subject comparison (last <?= h((string)count($cmpExamIds)) ?> exams)
+        </div>
+        <div class="small-muted">Grouped bars across the last <?= h((string)count($cmpExamIds)) ?> exams</div>
+      </div>
+
+      <div class="card-body">
+        <?php if (count($cmpExamIds) >= 2): ?>
+          <div class="border rounded-3 p-3 bg-white shadow-soft" data-aos="zoom-in">
+            <div class="chart-wrap" style="height: 360px;">
+              <canvas id="subjectCompareChart"></canvas>
+            </div>
+            <div class="small text-secondary mt-2">
+              This compares subject scores across the last <?= h((string)count($cmpExamIds)) ?> exams. Missing bars mean no recorded score for that subject in the selected exam.
+            </div>
+          </div>
+        <?php else: ?>
+          <div class="text-secondary">Not enough exams to compare.</div>
+        <?php endif; ?>
+      </div>
+    </div>
+  </div>
+</div>
+
 
       <div class="card shadow-soft mt-3" data-aos="fade-up">
         <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
@@ -1140,6 +1253,11 @@ $pageTitle = 'Student Results (Public)';
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
+<script nonce="<?= h($cspNonce) ?>">
+  if (window.AOS) {
+    AOS.init({ duration: 650, easing: 'ease-out-cubic', once: true, offset: 40 });
+  }
+</script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <?php if ($pupil && !empty($timeline)): ?>
@@ -1153,7 +1271,13 @@ $pageTitle = 'Student Results (Public)';
   // --- NEW: per-bar colors for delta chart ---
     const deltaColors = <?= json_encode($deltaBarColors, JSON_UNESCAPED_UNICODE) ?>;
     const deltaBorderColors = <?= json_encode($deltaBarBorderColors, JSON_UNESCAPED_UNICODE) ?>;
-
+    
+    // --- NEW: subject comparison (up to 4 exams) ---
+    const cmpLabels   = <?= json_encode($cmpLabels, JSON_UNESCAPED_UNICODE) ?>;
+    const cmpExamIds  = <?= json_encode($cmpExamIds, JSON_UNESCAPED_UNICODE) ?>;
+    const cmpSubLabels = <?= json_encode($cmpSubLabels, JSON_UNESCAPED_UNICODE) ?>;
+    const cmpDatasets = <?= json_encode($cmpDatasets, JSON_UNESCAPED_UNICODE) ?>;
+    const cmpSuggestedMax = <?= (int)$cmpSuggestedMax ?>;
 
   const subjectSeriesMap = <?= json_encode(array_reduce($subjectRows, static function($acc, $sr) {
       $sid = (string)$sr['sid'];
@@ -1167,8 +1291,6 @@ $pageTitle = 'Student Results (Public)';
       ];
       return $acc;
   }, []), JSON_UNESCAPED_UNICODE) ?>;
-
-  AOS.init({ duration: 650, easing: 'ease-out-cubic', once: true, offset: 40 });
 
   const totalsCtx = document.getElementById('totalsChart');
     if (totalsCtx) {
@@ -1293,6 +1415,62 @@ $pageTitle = 'Student Results (Public)';
         }
       });
     }
+    
+    const subjectCompareCtx = document.getElementById('subjectCompareChart');
+    if (subjectCompareCtx && Array.isArray(cmpExamIds) && cmpExamIds.length >= 2) {
+    
+      // Build up to 4 datasets dynamically (Chart.js will auto-color each dataset)
+      const ds = cmpExamIds.map((eid, i) => ({
+        label: cmpLabels[i] || `Exam ${i + 1}`,
+        data: (cmpDatasets && cmpDatasets[String(eid)]) ? cmpDatasets[String(eid)] : [],
+        borderWidth: 1,
+        borderRadius: 8,
+        maxBarThickness: 22
+      }));
+    
+      new Chart(subjectCompareCtx, {
+        type: 'bar',
+        data: {
+          labels: cmpSubLabels,
+          datasets: ds
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const v = ctx.parsed.y;
+                  if (v === null || typeof v === 'undefined') return `${ctx.dataset.label}: —`;
+                  return `${ctx.dataset.label}: ${v.toFixed(1)} pts`;
+                },
+                // show delta between last two exams in tooltip (useful even with 4 datasets)
+                afterBody: (items) => {
+                  if (!items || items.length < 2) return '';
+                  const a = items[items.length - 2].parsed.y;
+                  const b = items[items.length - 1].parsed.y;
+                  if (a == null || b == null) return '';
+                  const d = b - a;
+                  const sign = d > 0 ? '+' : '';
+                  return `Δ (last two): ${sign}${d.toFixed(1)} pts`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { maxRotation: 45, minRotation: 0 } },
+            y: { beginAtZero: true, suggestedMax: cmpSuggestedMax }
+          }
+        }
+      });
+    }
+
+
+    
+    
+
 
   let subjectModalChart = null;
   const modalEl = document.getElementById('subjectTrendModal');
@@ -1331,7 +1509,14 @@ $pageTitle = 'Student Results (Public)';
           tooltip: { mode: 'index', intersect: false }
         },
         interaction: { mode: 'index', intersect: false },
-        scales: { y: { beginAtZero: true } }
+        options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true }, tooltip: { mode: 'index', intersect: false } },
+      interaction: { mode: 'index', intersect: false },
+      scales: { y: { beginAtZero: true, suggestedMax: 40 } }
+    }
+
       }
     });
   }

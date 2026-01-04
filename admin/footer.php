@@ -1,9 +1,8 @@
 <?php
-// admin/footer.php — Admin layout footer (Bootstrap 5.3.8) + UX polish + CSP nonce support
+// admin/footer.php — Unified layout footer (Bootstrap 5.3.8) + UX polish + CSP nonce support
 
 declare(strict_types=1);
 
-// If your header sets this, reuse it. If not, fall back gracefully.
 $cspNonce = '';
 if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['csp_nonce']) && is_string($_SESSION['csp_nonce'])) {
     $cspNonce = $_SESSION['csp_nonce'];
@@ -11,9 +10,6 @@ if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['csp_nonce']) &&
 
 $appName = 'School Exam Analytics';
 $year    = (int)date('Y');
-
-// Optional: show app version/commit if you define it somewhere (recommended).
-// e.g. define('APP_VERSION', '1.0.0');
 $appVersion = defined('APP_VERSION') ? (string)APP_VERSION : '';
 ?>
 </main>
@@ -44,14 +40,15 @@ $appVersion = defined('APP_VERSION') ? (string)APP_VERSION : '';
   </div>
 </footer>
 
-<!-- Optional toast container (for future use) -->
 <div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1100;"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+        crossorigin="anonymous"></script>
 
 <script<?= $cspNonce !== '' ? ' nonce="' . htmlspecialchars($cspNonce, ENT_QUOTES, 'UTF-8') . '"' : '' ?>>
 (function () {
-  // Smooth "Back to top" (no dependency)
+  // Smooth "Back to top"
   var link = document.getElementById('backToTopLink');
   if (link) {
     link.addEventListener('click', function (e) {
@@ -60,8 +57,7 @@ $appVersion = defined('APP_VERSION') ? (string)APP_VERSION : '';
     });
   }
 
-  // Enable all tooltips globally if you add tooltip attributes later.
-  // Safe even if no tooltips exist.
+  // Enable tooltips globally if present
   try {
     var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
     tooltipTriggerList.forEach(function (el) { new bootstrap.Tooltip(el); });
@@ -71,4 +67,3 @@ $appVersion = defined('APP_VERSION') ? (string)APP_VERSION : '';
 
 </body>
 </html>
-

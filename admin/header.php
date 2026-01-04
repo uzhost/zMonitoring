@@ -9,12 +9,11 @@ require_once __DIR__ . '/../inc/auth.php';
 session_start_secure();
 
 // -------------------- Mode flags --------------------
-// Default: admin pages require auth and show admin navbar.
 $auth_required   = $auth_required   ?? true;
 $show_admin_nav  = $show_admin_nav  ?? true;
 
 if ($auth_required) {
-    require_admin(); // blocks non-admins
+    require_admin();
 }
 
 // -------------------- Page metadata --------------------
@@ -28,12 +27,17 @@ $active = static function (string $file) use ($current): string {
     return $current === $file ? ' active' : '';
 };
 
-// Import dropdown active group
-$importPages = ['pupils_import.php', 'results_import.php', 'subject_import.php'];
+// -------------------- Nav groups (for dropdown active state) --------------------
+$importPages = ['pupils_import.php', 'results_import.php', 'subject_import.php', 'subjects.php'];
 $isImportActive = in_array($current, $importPages, true);
 
+$classPages = ['class_report.php', 'class_pupils.php'];
+$isClassActive = in_array($current, $classPages, true);
+
+$pupilPages = ['pupils.php', 'pupils_result.php'];
+$isPupilsActive = in_array($current, $pupilPages, true);
+
 // -------------------- Flash messages (optional) --------------------
-// Convention: $_SESSION['flash'] = [['type'=>'success|danger|warning|info','msg'=>'...'], ...]
 $flashes = [];
 if (!empty($_SESSION['flash']) && is_array($_SESSION['flash'])) {
     foreach ($_SESSION['flash'] as $f) {
@@ -96,6 +100,49 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
       .card{ border-radius:16px; }
     </style>
   <?php endif; ?>
+
+  <?php if (!$isGuest): ?>
+    <style nonce="<?= htmlspecialchars($cspNonce, ENT_QUOTES, 'UTF-8') ?>">
+      /* Navbar polish (scoped and safe) */
+      .navbar{
+        border-bottom: 1px solid rgba(255,255,255,.08);
+      }
+      .navbar .nav-link{
+        border-radius: .65rem;
+        padding: .55rem .75rem;
+      }
+      .navbar .nav-link.active{
+        background: rgba(255,255,255,.12);
+      }
+      .navbar .nav-link:hover{
+        background: rgba(255,255,255,.08);
+      }
+      .dropdown-menu{
+        border-radius: .9rem;
+        overflow: hidden;
+      }
+      .dropdown-menu-dark{
+        border: 1px solid rgba(255,255,255,.08);
+      }
+      .dropdown-item{
+        padding: .55rem .9rem;
+      }
+      .dropdown-item.active,
+      .dropdown-item:active{
+        background: rgba(13,110,253,.25);
+      }
+      .nav-divider{
+        width: 1px;
+        background: rgba(255,255,255,.12);
+        margin: .55rem .6rem;
+        align-self: stretch;
+        display: none;
+      }
+      @media (min-width: 992px){
+        .nav-divider{ display:block; }
+      }
+    </style>
+  <?php endif; ?>
 </head>
 <body class="bg-light" id="top">
 
@@ -124,12 +171,15 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
     </button>
 
     <div class="collapse navbar-collapse" id="adminNav">
-      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0 gap-lg-1">
+
         <li class="nav-item">
           <a class="nav-link<?= $active('dashboard.php') ?>" href="dashboard.php" aria-current="<?= $current === 'dashboard.php' ? 'page' : 'false' ?>">
             <i class="bi bi-speedometer2 me-1"></i> Dashboard
           </a>
         </li>
+
+        <div class="nav-divider"></div>
 
         <!-- Import dropdown -->
         <li class="nav-item dropdown">
@@ -154,6 +204,7 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
                 <i class="bi bi-journal-text me-2"></i> Results import
               </a>
             </li>
+            <li><hr class="dropdown-divider"></li>
             <li>
               <a class="dropdown-item<?= $active('subjects.php') ?>" href="subjects.php">
                 <i class="bi bi-book me-2"></i> Subjects
@@ -162,17 +213,66 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
           </ul>
         </li>
 
-        <li class="nav-item">
-          <a class="nav-link<?= $active('pupils.php') ?>" href="pupils.php" aria-current="<?= $current === 'pupils.php' ? 'page' : 'false' ?>">
+        <!-- Class dropdown (dark + consistent) -->
+        <li class="nav-item dropdown">
+          <a
+            class="nav-link dropdown-toggle<?= $isClassActive ? ' active' : '' ?>"
+            href="#"
+            role="button"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+            aria-current="<?= $isClassActive ? 'page' : 'false' ?>"
+          >
+            <i class="bi bi-diagram-3 me-1"></i> Class
+          </a>
+          <ul class="dropdown-menu dropdown-menu-dark shadow-sm">
+            <li>
+              <a class="dropdown-item<?= $active('class_report.php') ?>" href="class_report.php">
+                <i class="bi bi-clipboard-data me-2"></i> Class reports
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('class_pupils.php') ?>" href="class_pupils.php">
+                <i class="bi bi-table me-2"></i> Class pupils
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <!-- Pupils dropdown -->
+        <li class="nav-item dropdown">
+          <a
+            class="nav-link dropdown-toggle<?= $isPupilsActive ? ' active' : '' ?>"
+            href="#"
+            role="button"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+            aria-current="<?= $isPupilsActive ? 'page' : 'false' ?>"
+          >
             <i class="bi bi-people me-1"></i> Pupils
           </a>
+          <ul class="dropdown-menu dropdown-menu-dark shadow-sm">
+            <li>
+              <a class="dropdown-item<?= $active('pupils.php') ?>" href="pupils.php">
+                <i class="bi bi-people me-2"></i> Pupils list
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('pupils_result.php') ?>" href="pupils_result.php">
+                <i class="bi bi-graph-up-arrow me-2"></i> Pupils results
+              </a>
+            </li>
+          </ul>
         </li>
+
+        <div class="nav-divider"></div>
 
         <li class="nav-item">
           <a class="nav-link<?= $active('reports.php') ?>" href="reports.php" aria-current="<?= $current === 'reports.php' ? 'page' : 'false' ?>">
             <i class="bi bi-bar-chart-line me-1"></i> Reports
           </a>
         </li>
+
       </ul>
 
       <div class="d-flex align-items-center gap-2">

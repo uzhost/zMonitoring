@@ -620,6 +620,19 @@ $pageTitle = 'Student Results (Public)';
 
     $deltaLabels = array_map(static fn($sr) => $sr['name'], $subjectRows);
     $deltaValues = array_map(static fn($sr) => (float)$sr['delta'], $subjectRows);
+    
+    // --- NEW: per-bar colors for delta chart (green up, red down, gray flat) ---
+    $deltaBarColors = array_map(static function($v) {
+      $v = (float)$v;
+      if (abs($v) < 0.0001) return 'rgba(108,117,125,0.85)'; // gray
+      return $v > 0 ? 'rgba(25,135,84,0.85)' : 'rgba(220,53,69,0.85)'; // green / red
+    }, $deltaValues);
+    
+    $deltaBarBorderColors = array_map(static function($v) {
+      $v = (float)$v;
+      if (abs($v) < 0.0001) return 'rgba(108,117,125,1)';
+      return $v > 0 ? 'rgba(25,135,84,1)' : 'rgba(220,53,69,1)';
+    }, $deltaValues);
 
     $clsLatest = $classStatsByExam[$latestExamId] ?? ['rank'=>null,'count'=>0,'avg_total'=>null];
     $parLatest = $parallelStatsByExam[$latestExamId] ?? ['rank'=>null,'count'=>0,'avg_total'=>null,'grade'=>$grade,'track'=>$track];
@@ -1136,6 +1149,11 @@ $pageTitle = 'Student Results (Public)';
 
   const deltaLabels = <?= json_encode($deltaLabels, JSON_UNESCAPED_UNICODE) ?>;
   const deltaValues = <?= json_encode($deltaValues, JSON_UNESCAPED_UNICODE) ?>;
+  
+  // --- NEW: per-bar colors for delta chart ---
+    const deltaColors = <?= json_encode($deltaBarColors, JSON_UNESCAPED_UNICODE) ?>;
+    const deltaBorderColors = <?= json_encode($deltaBarBorderColors, JSON_UNESCAPED_UNICODE) ?>;
+
 
   const subjectSeriesMap = <?= json_encode(array_reduce($subjectRows, static function($acc, $sr) {
       $sid = (string)$sr['sid'];
@@ -1153,55 +1171,128 @@ $pageTitle = 'Student Results (Public)';
   AOS.init({ duration: 650, easing: 'ease-out-cubic', once: true, offset: 40 });
 
   const totalsCtx = document.getElementById('totalsChart');
-  if (totalsCtx) {
-    new Chart(totalsCtx, {
-      type: 'line',
-      data: {
-        labels: labelsChrono,
-        datasets: [{
-          label: 'Total score',
-          data: totalsChrono,
-          tension: 0.25,
-          fill: true,
-          pointRadius: 3,
-          pointHoverRadius: 5,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: true },
-          tooltip: { mode: 'index', intersect: false }
+    if (totalsCtx) {
+      new Chart(totalsCtx, {
+        type: 'line',
+        data: {
+          labels: labelsChrono,
+          datasets: [{
+            label: 'Total score',
+            data: totalsChrono,
+            tension: 0.25,
+            fill: true,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+    
+            // --- NEW: multi-colored trend segments ---
+            segment: {
+              borderColor: ctx => {
+                const y0 = ctx.p0.parsed.y;
+                const y1 = ctx.p1.parsed.y;
+    
+                if (y1 > y0) return 'rgba(25,135,84,0.95)';   // green ↑
+                if (y1 < y0) return 'rgba(220,53,69,0.95)';   // red ↓
+                return 'rgba(108,117,125,0.9)';               // gray →
+              }
+            },
+    
+            // points reflect direction too
+            pointBackgroundColor: ctx => {
+              const i = ctx.dataIndex;
+              if (i === 0) return 'rgba(13,110,253,0.9)'; // first point
+              const prev = totalsChrono[i - 1];
+              const curr = totalsChrono[i];
+              if (curr > prev) return 'rgba(25,135,84,0.95)';
+              if (curr < prev) return 'rgba(220,53,69,0.95)';
+              return 'rgba(108,117,125,0.9)';
+            }
+          }]
         },
-        interaction: { mode: 'index', intersect: false },
-        scales: { y: { beginAtZero: true } }
-      }
-    });
-  }
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                label: ctx => {
+                  const v = ctx.parsed.y;
+                  const i = ctx.dataIndex;
+                  if (i === 0) return `Total: ${v.toFixed(1)}`;
+                  const d = v - totalsChrono[i - 1];
+                  const sign = d > 0 ? '+' : '';
+                  return `Total: ${v.toFixed(1)} (${sign}${d.toFixed(1)})`;
+                }
+              }
+            }
+          },
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: ctx =>
+                  ctx.tick.value === 0
+                    ? 'rgba(0,0,0,0.25)'
+                    : 'rgba(0,0,0,0.08)',
+                lineWidth: ctx => (ctx.tick.value === 0 ? 2 : 1)
+              }
+            }
+          }
+        }
+      });
+    }
+
 
   const deltaCtx = document.getElementById('deltaChart');
-  if (deltaCtx) {
-    new Chart(deltaCtx, {
-      type: 'bar',
-      data: {
-        labels: deltaLabels,
-        datasets: [{
-          label: 'Δ points (latest vs previous)',
-          data: deltaValues,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: true },
-          tooltip: { mode: 'index', intersect: false }
+    if (deltaCtx) {
+      new Chart(deltaCtx, {
+        type: 'bar',
+        data: {
+          labels: deltaLabels,
+          datasets: [{
+            label: 'Δ points (latest vs previous)',
+            data: deltaValues,
+            backgroundColor: deltaColors,
+            borderColor: deltaBorderColors,
+            borderWidth: 1,
+            borderRadius: 8,
+            maxBarThickness: 28,
+          }]
         },
-        scales: { y: { beginAtZero: true } }
-      }
-    });
-  }
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: true },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const v = ctx.parsed.y ?? 0;
+                  const sign = v > 0 ? '+' : '';
+                  return `Δ ${sign}${v.toFixed(1)} points`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { autoSkip: false, maxRotation: 45, minRotation: 0 }
+            },
+            y: {
+              beginAtZero: true,
+              grid: {
+                // emphasize the zero baseline to separate up/down visually
+                color: (ctx) => (ctx.tick && ctx.tick.value === 0)
+                  ? 'rgba(0,0,0,0.25)'
+                  : 'rgba(0,0,0,0.08)',
+                lineWidth: (ctx) => (ctx.tick && ctx.tick.value === 0) ? 2 : 1
+              }
+            }
+          }
+        }
+      });
+    }
 
   let subjectModalChart = null;
   const modalEl = document.getElementById('subjectTrendModal');

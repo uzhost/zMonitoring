@@ -1,5 +1,5 @@
 <?php
-// admin/dashboard.php — Dashboard (export-before-HTML; DECIMAL scores; UI improved)
+// admin/dashboard.php — Dashboard (export-before-HTML; DECIMAL scores; HY093-safe; UI enhanced)
 
 declare(strict_types=1);
 
@@ -10,7 +10,7 @@ session_start_secure();
 require_role('admin');
 
 /**
- * Null-safe escape wrapper (your h() is likely strict).
+ * Null-safe escape wrapper (your h() may be strict).
  */
 function eh($v): string { return h((string)($v ?? '')); }
 
@@ -65,8 +65,8 @@ function url_with(array $overrides): string {
 /**
  * PDO helpers
  *
- * Critical fix for HY093:
- * - MySQL PDO (native prepares) can throw HY093 when the same named placeholder is used multiple times in one SQL.
+ * Fix for HY093:
+ * - Some MySQL PDO configurations can throw HY093 when the same named placeholder is used multiple times in one SQL.
  * - We rewrite duplicates: :pass => :pass, :pass__2, :pass__3, etc., and bind each.
  */
 function fetch_all(PDO $pdo, string $sql, array $params = []): array
@@ -114,7 +114,7 @@ function fetch_one(PDO $pdo, string $sql, array $params = []): ?array {
 }
 
 /**
- * Dashboard thresholds (decimals supported; your schema uses DECIMAL scores)
+ * Dashboard thresholds (decimals supported; score is DECIMAL)
  */
 $passThreshold      = gf('pass', 0, 40) ?? 24.0;
 $goodThreshold      = gf('good', 0, 40) ?? 30.0;
@@ -125,11 +125,12 @@ $goodThreshold = min(max($goodThreshold, $passThreshold), 40.0);
 $excellentThreshold = min(max($excellentThreshold, $goodThreshold), 40.0);
 
 /**
- * Filters (aligned to your zmonitoring_db.sql style schema)
+ * Filters
+ * - term: allow 1..6 (not 1..2). Your exams.term is tinyint, and you may use 1/2 or more.
  */
 $filters = [
     'academic_year' => gs('academic_year', 12),
-    'term'          => gi('term', 1, 2),
+    'term'          => gi('term', 1, 6),
     'exam_id'       => gi('exam_id', 1),
     'subject_id'    => gi('subject_id', 1),
     'class_code'    => gs('class_code', 30),
@@ -157,10 +158,29 @@ $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
 
 /**
  * CSV export MUST run before header.php emits HTML.
+ * Enhancement: cap export rows (safety) and stream output.
  */
 function export_csv_slice(PDO $pdo, string $whereSql, array $params): void
 {
-    $rows = fetch_all($pdo, "
+    $maxRows = 10000; // safety cap; adjust if needed
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="results_slice_' . date('Ymd_His') . '.csv"');
+    header('X-Content-Type-Options: nosniff');
+
+    // BOM for Excel
+    echo "\xEF\xBB\xBF";
+
+    $out = fopen('php://output', 'w');
+    fputcsv($out, [
+        'academic_year','term','exam_name','exam_date',
+        'class_code','track',
+        'student_login','surname','name','middle_name',
+        'subject_code','subject_name',
+        'score'
+    ]);
+
+    $sql = "
         SELECT
           e.academic_year,
           e.term,
@@ -181,25 +201,19 @@ function export_csv_slice(PDO $pdo, string $whereSql, array $params): void
         JOIN exams e    ON e.id = r.exam_id
         $whereSql
         ORDER BY COALESCE(e.exam_date,'9999-12-31') DESC, e.id DESC, p.class_code ASC, p.surname ASC, p.name ASC, s.name ASC
-    ", $params);
+        LIMIT :lim
+    ";
 
-    header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="results_slice_' . date('Ymd_His') . '.csv"');
-    header('X-Content-Type-Options: nosniff');
+    // Use a plain PDO prepare here to keep streaming simple.
+    $st = $pdo->prepare($sql);
+    foreach ($params as $k => $v) {
+        $st->bindValue(':' . $k, $v);
+    }
+    $st->bindValue(':lim', $maxRows, PDO::PARAM_INT);
+    $st->execute();
 
-    // BOM for Excel
-    echo "\xEF\xBB\xBF";
-
-    $out = fopen('php://output', 'w');
-    fputcsv($out, [
-        'academic_year','term','exam_name','exam_date',
-        'class_code','track',
-        'student_login','surname','name','middle_name',
-        'subject_code','subject_name',
-        'score'
-    ]);
-
-    foreach ($rows as $r) {
+    $count = 0;
+    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
         fputcsv($out, [
             (string)$r['academic_year'],
             (string)$r['term'],
@@ -215,7 +229,15 @@ function export_csv_slice(PDO $pdo, string $whereSql, array $params): void
             (string)$r['subject_name'],
             (string)$r['score'],
         ]);
+        $count++;
     }
+
+    // If capped, add a note row
+    if ($count >= $maxRows) {
+        fputcsv($out, []);
+        fputcsv($out, ['NOTE', "Export capped at {$maxRows} rows. Narrow filters to export more."]);
+    }
+
     fclose($out);
     exit;
 }
@@ -303,7 +325,6 @@ if ($nRecords > 0) {
         $whereSql
     ", $params + ['pass' => $passThreshold]) ?? $passRow;
 
-    // NOTE: :pass is used multiple times here; helper rewrites duplicates to avoid HY093.
     $bands = fetch_one($pdo, "
         SELECT
           SUM(r.score < :pass) AS needs_support,
@@ -322,7 +343,7 @@ if ($nRecords > 0) {
 $passRate = (!empty($passRow['total'])) ? ((float)$passRow['passed'] / (float)$passRow['total']) * 100.0 : 0.0;
 
 /**
- * Histogram (integer bins 0..40) from DECIMAL score:
+ * Histogram (bins 0..40) from DECIMAL score:
  * bucket = FLOOR(score) clamped to 0..40
  */
 $histMap = array_fill(0, 41, 0);
@@ -348,6 +369,7 @@ if ($nRecords > 0) {
 
 /**
  * Top / Bottom pupils (by average)
+ * UI enhancement: add quick link to pupil results page if it exists.
  */
 $topPupils = $nRecords > 0 ? fetch_all($pdo, "
     SELECT
@@ -365,7 +387,7 @@ $topPupils = $nRecords > 0 ? fetch_all($pdo, "
     $whereSql
     GROUP BY p.id
     ORDER BY avg_score DESC, n DESC
-    LIMIT 10
+    LIMIT 12
 ", $params) : [];
 
 $bottomPupils = $nRecords > 0 ? fetch_all($pdo, "
@@ -384,7 +406,7 @@ $bottomPupils = $nRecords > 0 ? fetch_all($pdo, "
     $whereSql
     GROUP BY p.id
     ORDER BY avg_score ASC, n DESC
-    LIMIT 10
+    LIMIT 12
 ", $params) : [];
 
 /**
@@ -447,7 +469,6 @@ if ($filters['date_to'])       $chips[] = ['k'=>'date_to','t'=>'To: ' . $filters
 
 /**
  * Score bucket badge based on thresholds.
- * We compare integer bins to thresholds (good enough for histogram context).
  */
 function score_badge_class(int $bucket, float $pass, float $good, float $excellent): string {
     if ($bucket < $pass) return 'text-bg-danger';
@@ -455,12 +476,20 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
     if ($bucket < $excellent) return 'text-bg-primary';
     return 'text-bg-success';
 }
-
 ?>
+<style>
+  /* Dashboard-specific minor polish (kept small; you can move to /assets/admin.css later) */
+  .kpi-icon { opacity: .55; }
+  .chip a { text-decoration: none; }
+  .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  .dist-row:hover { background: rgba(0,0,0,.02); }
+</style>
+
 <div class="row g-3 mb-3">
   <div class="col-12">
     <div class="card shadow-sm">
       <div class="card-body">
+
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
           <div class="d-flex align-items-center gap-2">
             <div class="fw-semibold"><i class="bi bi-funnel me-2"></i>Filters</div>
@@ -485,9 +514,9 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
         </div>
 
         <?php if ($chips): ?>
-          <div class="mt-2 d-flex flex-wrap gap-2">
+          <div class="mt-2 d-flex flex-wrap gap-2 chip">
             <?php foreach ($chips as $c): ?>
-              <a class="badge rounded-pill text-bg-secondary-subtle border text-secondary-emphasis text-decoration-none"
+              <a class="badge rounded-pill text-bg-secondary-subtle border text-secondary-emphasis"
                  href="<?= eh(url_with([$c['k'] => null])) ?>"
                  title="Remove filter">
                 <i class="bi bi-x-circle me-1"></i><?= eh($c['t']) ?>
@@ -507,12 +536,13 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
             </select>
           </div>
 
-          <div class="col-md-1">
+          <div class="col-md-2">
             <label class="form-label">Term</label>
             <select name="term" class="form-select">
               <option value="">All</option>
-              <option value="1" <?= ($filters['term'] === 1) ? 'selected' : '' ?>>1</option>
-              <option value="2" <?= ($filters['term'] === 2) ? 'selected' : '' ?>>2</option>
+              <?php for ($t=1; $t<=4; $t++): ?>
+                <option value="<?= $t ?>" <?= ($filters['term'] === $t) ? 'selected' : '' ?>><?= $t ?></option>
+              <?php endfor; ?>
             </select>
           </div>
 
@@ -530,6 +560,7 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
                 <option value="<?= $eid ?>" <?= ($filters['exam_id'] === $eid) ? 'selected' : '' ?>><?= eh($label) ?></option>
               <?php endforeach; ?>
             </select>
+            <div class="form-text">Tip: narrow by Year/Term to shorten this list.</div>
           </div>
 
           <div class="col-md-3">
@@ -576,7 +607,7 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
 
           <div class="col-12 mt-2">
             <a class="text-decoration-none" data-bs-toggle="collapse" href="#advancedFilters" role="button" aria-expanded="false" aria-controls="advancedFilters">
-              <i class="bi bi-sliders me-1"></i>Advanced thresholds (DECIMAL supported)
+              <i class="bi bi-sliders me-1"></i>Advanced thresholds
             </a>
           </div>
 
@@ -593,6 +624,9 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
               <div class="col-md-2">
                 <label class="form-label">Excellent</label>
                 <input type="number" step="0.1" name="excellent" min="0" max="40" class="form-control" value="<?= eh($excellentThreshold) ?>">
+              </div>
+              <div class="col-12">
+                <div class="small text-muted">Scores are DECIMAL; distribution bins still use <span class="mono">FLOOR(score)</span>.</div>
               </div>
             </div>
           </div>
@@ -613,117 +647,203 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
             <div class="small">Try removing filters, selecting another exam, or importing results.</div>
           </div>
         <?php endif; ?>
+
       </div>
     </div>
   </div>
 </div>
 
+<style>
+  /* Optional: ensures equal visual height even if text wraps */
+  .kpi-card .card-body { min-height: 112px; }
+</style>
+
 <div class="row g-3 mb-3">
   <div class="col-md-3">
-    <div class="card shadow-sm">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="text-muted small">Records</div>
-          <div class="fs-4 fw-semibold"><?= $nRecords ?></div>
+    <div class="card shadow-sm h-100 kpi-card">
+      <div class="card-body d-flex flex-column h-100">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="text-muted small">Records</div>
+            <div class="fs-4 fw-semibold mono"><?= $nRecords ?></div>
+          </div>
+          <div class="text-muted fs-3 kpi-icon"><i class="bi bi-database"></i></div>
         </div>
-        <div class="text-muted fs-3"><i class="bi bi-database"></i></div>
+        <div class="mt-auto small text-muted">&nbsp;</div>
       </div>
     </div>
   </div>
 
   <div class="col-md-3">
-    <div class="card shadow-sm">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="text-muted small">Average</div>
-          <div class="fs-4 fw-semibold"><?= ($kpi['avg_score'] !== null) ? number_format((float)$kpi['avg_score'], 2) : '—' ?></div>
-          <div class="small text-muted">Min <?= eh($kpi['min_score'] ?? '—') ?> • Max <?= eh($kpi['max_score'] ?? '—') ?></div>
+    <div class="card shadow-sm h-100 kpi-card">
+      <div class="card-body d-flex flex-column h-100">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="text-muted small">Average</div>
+            <div class="fs-4 fw-semibold mono">
+              <?= ($kpi['avg_score'] !== null) ? number_format((float)$kpi['avg_score'], 2) : '—' ?>
+            </div>
+            <div class="small text-muted mono">
+              Min <?= eh($kpi['min_score'] ?? '—') ?> • Max <?= eh($kpi['max_score'] ?? '—') ?>
+            </div>
+          </div>
+          <div class="text-muted fs-3 kpi-icon"><i class="bi bi-graph-up"></i></div>
         </div>
-        <div class="text-muted fs-3"><i class="bi bi-graph-up"></i></div>
+        <div class="mt-auto small text-muted">&nbsp;</div>
       </div>
     </div>
   </div>
 
   <div class="col-md-3">
-    <div class="card shadow-sm">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="text-muted small">Median</div>
-          <div class="fs-4 fw-semibold"><?= !empty($median['median_score']) ? number_format((float)$median['median_score'], 2) : '—' ?></div>
-          <div class="small text-muted">Window-function based</div>
+    <div class="card shadow-sm h-100 kpi-card">
+      <div class="card-body d-flex flex-column h-100">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="text-muted small">Median</div>
+            <div class="fs-4 fw-semibold mono">
+              <?= !empty($median['median_score']) ? number_format((float)$median['median_score'], 2) : '—' ?>
+            </div>
+            <div class="small text-muted">Window-function based</div>
+          </div>
+          <div class="text-muted fs-3 kpi-icon"><i class="bi bi-distribute-vertical"></i></div>
         </div>
-        <div class="text-muted fs-3"><i class="bi bi-distribute-vertical"></i></div>
+        <div class="mt-auto small text-muted">&nbsp;</div>
       </div>
     </div>
   </div>
 
   <div class="col-md-3">
-    <div class="card shadow-sm">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
-          <div class="text-muted small">Pass rate (≥ <?= eh($passThreshold) ?>)</div>
-          <div class="fs-4 fw-semibold"><?= number_format($passRate, 1) ?>%</div>
-          <div class="small text-muted"><?= (int)($passRow['passed'] ?? 0) ?> / <?= (int)($passRow['total'] ?? 0) ?></div>
+    <div class="card shadow-sm h-100 kpi-card">
+      <div class="card-body d-flex flex-column h-100">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="text-muted small">Pass rate (≥ <?= eh($passThreshold) ?>)</div>
+            <div class="fs-4 fw-semibold mono"><?= number_format($passRate, 1) ?>%</div>
+            <div class="small text-muted mono">
+              <?= (int)($passRow['passed'] ?? 0) ?> / <?= (int)($passRow['total'] ?? 0) ?>
+            </div>
+          </div>
+          <div class="text-muted fs-3 kpi-icon"><i class="bi bi-check2-circle"></i></div>
         </div>
-        <div class="text-muted fs-3"><i class="bi bi-check2-circle"></i></div>
+        <div class="mt-auto small text-muted">&nbsp;</div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="row g-3 mb-3">
-  <div class="col-lg-6">
-    <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-          <div class="fw-semibold"><i class="bi bi-bar-chart-steps me-2"></i>Score distribution (0–40 bins)</div>
-          <div class="small text-muted">Bucket = FLOOR(score)</div>
-        </div>
 
-        <div class="table-responsive">
-          <table class="table table-sm align-middle mb-0">
-            <thead class="table-light">
+<div class="row g-3 mb-3">
+  <?php
+// Grouped bins for readability (uses existing $histMap[0..40])
+$groups = [
+  ['label' => '0',      'from' => 0,  'to' => 0],
+  ['label' => '1–5',    'from' => 1,  'to' => 5],
+  ['label' => '6–10',   'from' => 6,  'to' => 10],
+  ['label' => '11–15',  'from' => 11, 'to' => 15],
+  ['label' => '16–20',  'from' => 16, 'to' => 20],
+  ['label' => '21–25',  'from' => 21, 'to' => 25],
+  ['label' => '26–30',  'from' => 26, 'to' => 30],
+  ['label' => '31–35',  'from' => 31, 'to' => 35],
+  ['label' => '36–40',  'from' => 36, 'to' => 40],
+];
+
+$groupRows = [];
+$maxGroupN = 0;
+
+foreach ($groups as $g) {
+  $sum = 0;
+  for ($i = $g['from']; $i <= $g['to']; $i++) {
+    $sum += (int)($histMap[$i] ?? 0);
+  }
+  $pct = $nRecords > 0 ? ($sum / $nRecords) * 100.0 : 0.0;
+
+  // Color by mid-point of range (simple + consistent)
+  $mid = (int)floor(($g['from'] + $g['to']) / 2);
+  $badgeClass = score_badge_class($mid, $passThreshold, $goodThreshold, $excellentThreshold);
+
+  $groupRows[] = [
+    'label' => $g['label'],
+    'from' => $g['from'],
+    'to' => $g['to'],
+    'n' => $sum,
+    'pct' => $pct,
+    'badge' => $badgeClass,
+  ];
+  if ($sum > $maxGroupN) $maxGroupN = $sum;
+}
+?>
+
+<div class="col-lg-6">
+  <div class="card shadow-sm h-100">
+    <div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="fw-semibold">
+          <i class="bi bi-bar-chart-steps me-2"></i>Score distribution (grouped)
+        </div>
+        <div class="small text-muted mono">bucket = FLOOR(score)</div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0">
+          <thead class="table-light">
+            <tr>
+              <th style="width:90px">Range</th>
+              <th>Share</th>
+              <th class="text-end" style="width:90px">Count</th>
+              <th class="text-end" style="width:80px">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($groupRows as $gr): ?>
+              <?php
+                $width = $maxGroupN > 0 ? ((float)$gr['n'] / (float)$maxGroupN) * 100.0 : 0.0;
+              ?>
               <tr>
-                <th style="width:72px">Bin</th>
-                <th>Distribution</th>
-                <th class="text-end" style="width:90px">Count</th>
-                <th class="text-end" style="width:80px">%</th>
+                <td>
+                  <span class="badge <?= eh($gr['badge']) ?> mono"><?= eh($gr['label']) ?></span>
+                </td>
+                <td>
+                  <div class="progress" style="height: 10px;">
+                    <div class="progress-bar"
+                         role="progressbar"
+                         style="width: <?= $width ?>%"
+                         aria-valuenow="<?= $width ?>"
+                         aria-valuemin="0"
+                         aria-valuemax="100"></div>
+                  </div>
+                </td>
+                <td class="text-end mono"><?= (int)$gr['n'] ?></td>
+                <td class="text-end text-muted mono"><?= number_format((float)$gr['pct'], 1) ?></td>
               </tr>
-            </thead>
-            <tbody>
-              <?php for ($b = 0; $b <= 40; $b++): ?>
-                <?php
-                  $n = (int)$histMap[$b];
-                  $pct = $nRecords > 0 ? ($n / $nRecords) * 100.0 : 0.0;
-                  $badgeClass = score_badge_class($b, $passThreshold, $goodThreshold, $excellentThreshold);
-                ?>
-                <tr>
-                  <td><span class="badge <?= eh($badgeClass) ?>"><?= $b ?></span></td>
-                  <td>
-                    <div class="progress" style="height: 10px;">
-                      <div class="progress-bar" role="progressbar" style="width: <?= $pct ?>%"></div>
-                    </div>
-                  </td>
-                  <td class="text-end"><?= $n ?></td>
-                  <td class="text-end text-muted"><?= number_format($pct, 1) ?></td>
-                </tr>
-              <?php endfor; ?>
-            </tbody>
-          </table>
-        </div>
+            <?php endforeach; ?>
+          </tbody>
+          <tfoot>
+            <tr class="table-light">
+              <th colspan="2" class="text-end">Total</th>
+              <th class="text-end mono"><?= (int)$nRecords ?></th>
+              <th class="text-end text-muted mono"><?= $nRecords > 0 ? '100.0' : '0.0' ?></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
 
-        <hr class="my-3">
+      <hr class="my-3">
 
-        <div class="d-flex flex-wrap gap-2">
-          <span class="badge text-bg-danger">Needs Support: <?= (int)($bands['needs_support'] ?? 0) ?></span>
-          <span class="badge text-bg-warning text-dark">Pass: <?= (int)($bands['pass_only'] ?? 0) ?></span>
-          <span class="badge text-bg-primary">Good: <?= (int)($bands['good'] ?? 0) ?></span>
-          <span class="badge text-bg-success">Excellent: <?= (int)($bands['excellent'] ?? 0) ?></span>
-          <span class="badge text-bg-secondary">Total: <?= (int)($bands['total'] ?? 0) ?></span>
-        </div>
+      <div class="d-flex flex-wrap gap-2">
+        <span class="badge text-bg-danger">Needs Support: <?= (int)($bands['needs_support'] ?? 0) ?></span>
+        <span class="badge text-bg-warning text-dark">Pass: <?= (int)($bands['pass_only'] ?? 0) ?></span>
+        <span class="badge text-bg-primary">Good: <?= (int)($bands['good'] ?? 0) ?></span>
+        <span class="badge text-bg-success">Excellent: <?= (int)($bands['excellent'] ?? 0) ?></span>
+        <span class="badge text-bg-secondary">Total: <?= (int)($bands['total'] ?? 0) ?></span>
+      </div>
+
+      <div class="small text-muted mt-2">
+        Grouping: 0, 1–5, 6–10, …, 36–40 (based on integer buckets).
       </div>
     </div>
   </div>
+</div>
+
 
   <div class="col-lg-6">
     <div class="card shadow-sm">
@@ -750,9 +870,9 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
                       <div class="fw-semibold"><?= eh($r['name']) ?></div>
                       <div class="small text-muted"><?= eh($r['code']) ?></div>
                     </td>
-                    <td class="text-end"><?= (int)$r['n'] ?></td>
-                    <td class="text-end"><?= number_format((float)$r['mean_score'], 2) ?></td>
-                    <td class="text-end"><?= number_format((float)$r['stdev_score'], 2) ?></td>
+                    <td class="text-end mono"><?= (int)$r['n'] ?></td>
+                    <td class="text-end mono"><?= number_format((float)$r['mean_score'], 2) ?></td>
+                    <td class="text-end mono"><?= number_format((float)$r['stdev_score'], 2) ?></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -793,8 +913,8 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
                       <?php endif; ?>
                     </td>
                     <td><?= eh($r['class_code']) ?></td>
-                    <td class="text-end"><?= (int)$r['n'] ?></td>
-                    <td class="text-end fw-semibold"><?= number_format((float)$r['avg_score'], 2) ?></td>
+                    <td class="text-end mono"><?= (int)$r['n'] ?></td>
+                    <td class="text-end fw-semibold mono"><?= number_format((float)$r['avg_score'], 2) ?></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -832,8 +952,8 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
                       <?php endif; ?>
                     </td>
                     <td><?= eh($r['class_code']) ?></td>
-                    <td class="text-end"><?= (int)$r['n'] ?></td>
-                    <td class="text-end fw-semibold"><?= number_format((float)$r['avg_score'], 2) ?></td>
+                    <td class="text-end mono"><?= (int)$r['n'] ?></td>
+                    <td class="text-end fw-semibold mono"><?= number_format((float)$r['avg_score'], 2) ?></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -872,8 +992,8 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
                     <td><?= eh($t['academic_year']) ?></td>
                     <td><?= eh($t['term']) ?></td>
                     <td><?= eh($t['exam_date']) ?></td>
-                    <td class="text-end"><?= (int)$t['n'] ?></td>
-                    <td class="text-end fw-semibold"><?= number_format((float)$t['avg_score'], 2) ?></td>
+                    <td class="text-end mono"><?= (int)$t['n'] ?></td>
+                    <td class="text-end fw-semibold mono"><?= number_format((float)$t['avg_score'], 2) ?></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>

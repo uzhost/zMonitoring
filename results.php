@@ -382,6 +382,8 @@ $pageTitle = 'Student Results';
     <div class="col-lg-4">
       <div class="card shadow-sm sticky-top sticky-top-2">
         <div class="card-body">
+            <div class="border rounded-3 p-3 mb-3 bg-white">
+            
           <div class="d-flex align-items-start justify-content-between gap-2">
             <div>
               <div class="text-uppercase small text-secondary">Student</div>
@@ -423,6 +425,7 @@ $pageTitle = 'Student Results';
                   <?php endif; ?>
                 </div>
               </div>
+              </div>
             </div>
           </div>
 
@@ -447,8 +450,9 @@ $pageTitle = 'Student Results';
             <div class="small-muted">Shows last score and the delta from the previous exam where that subject exists.</div>
           </div>
         </div>
-        <div class="card-body p-0">
+        <div class="card-body ">
           <div class="table-responsive">
+              <div class="border rounded-3 p-3 mb-3 bg-white">
             <table class="table table-sm align-middle mb-0">
               <thead class="table-light">
                 <tr>
@@ -511,6 +515,7 @@ $pageTitle = 'Student Results';
               <?php endif; ?>
               </tbody>
             </table>
+            </div>
           </div>
         </div>
       </div>

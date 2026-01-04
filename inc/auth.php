@@ -6,42 +6,147 @@ declare(strict_types=1);
 /**
  * Standalone helpers:
  * - session_start_secure()
- * - csrf_token(), verify_csrf()
+ * - csrf_token(), csrf_field(), verify_csrf()
  * - require_admin(), require_role()
  * - admin_id(), admin_role(), admin_login()
- * - h() (NULL-safe), h_attr() (attribute-safe)
+ * - admin_login_session(), admin_logout_session()
+ * - h() (NULL-safe), h_attr()
+ * - safe_next_url()   (optional, for login redirect safety)
  *
  * Assumes admin session keys:
  *   $_SESSION['admin_id'], $_SESSION['admin_role'], $_SESSION['admin_login']
  */
 
 // ------------------------------------------------------------
+// Config knobs (safe defaults)
+// ------------------------------------------------------------
+
+// Idle timeout in seconds (0 disables). Recommend 2–8 hours for admin panels.
+const AUTH_IDLE_TIMEOUT = 6 * 60 * 60; // 6 hours
+
+// Regenerate session id every N seconds while logged-in (0 disables).
+const AUTH_ROTATE_INTERVAL = 30 * 60; // 30 minutes
+
+// Bind session to user agent hash (lightweight anti-hijack). Set false to disable.
+const AUTH_BIND_UA = true;
+
+// Trust proxy HTTPS headers only from these proxy IPs (add your reverse proxy IPs if used).
+// If you are not behind a proxy, leave as localhost only.
+const AUTH_TRUSTED_PROXIES = ['127.0.0.1', '::1'];
+
+// ------------------------------------------------------------
 // Session (hardened)
 // ------------------------------------------------------------
+
+/** Determine if request is HTTPS, proxy-aware (only if proxy is trusted) */
+function is_https_request(): bool
+{
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+    if ($https) {
+        return true;
+    }
+
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $behindTrustedProxy = ($remote !== '' && in_array($remote, AUTH_TRUSTED_PROXIES, true));
+    if (!$behindTrustedProxy) {
+        return false;
+    }
+
+    // Common proxy headers
+    $xfp = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
+    if ($xfp === 'https') {
+        return true;
+    }
+
+    $cfv = strtolower((string)($_SERVER['HTTP_CF_VISITOR'] ?? ''));
+    if ($cfv !== '' && str_contains($cfv, 'https')) {
+        return true;
+    }
+
+    return false;
+}
+
 function session_start_secure(): void
 {
     if (session_status() === PHP_SESSION_ACTIVE) {
+        // Still enforce rolling checks if already active
+        _auth_session_runtime_checks();
         return;
     }
 
-    // Detect HTTPS (basic). If you're behind a reverse proxy, handle that in a dedicated security.php.
-    $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+    $secure = is_https_request();
 
-    // Harden session cookies
+    // Harden session behavior
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
-    ini_set('session.cookie_httponly', '1');
-    ini_set('session.cookie_secure', $secure ? '1' : '0');
+    ini_set('session.sid_length', '48');
+    ini_set('session.sid_bits_per_character', '6');
 
-    // Lax is generally best for typical admin panels; if you never need cross-site POSTs, Strict is OK.
-    ini_set('session.cookie_samesite', 'Lax');
-
-    // Optional: mitigate very long-lived sessions (tune to your needs)
-    // ini_set('session.gc_maxlifetime', '21600'); // 6 hours
-
-    // NOTE: Do NOT send headers here (library file). Pages can set Cache-Control themselves.
+    // Cookie params (set before session_start)
+    $params = session_get_cookie_params();
+    $cookie = [
+        'lifetime' => 0,
+        'path'     => $params['path'] ?? '/',
+        'domain'   => $params['domain'] ?? '',
+        'secure'   => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ];
+    session_set_cookie_params($cookie);
 
     session_start();
+
+    // Basic anti-hijack signals
+    if (AUTH_BIND_UA) {
+        $ua = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
+        $uaHash = hash('sha256', $ua);
+        if (empty($_SESSION['_ua_hash'])) {
+            $_SESSION['_ua_hash'] = $uaHash;
+        } elseif (is_string($_SESSION['_ua_hash']) && !hash_equals($_SESSION['_ua_hash'], $uaHash)) {
+            // UA changed -> invalidate session
+            admin_logout_session();
+            http_response_code(401);
+            echo 'Session invalid.';
+            exit;
+        }
+    }
+
+    // Initialize timestamps
+    if (empty($_SESSION['_created_at']) || !is_int($_SESSION['_created_at'])) {
+        $_SESSION['_created_at'] = time();
+    }
+    if (empty($_SESSION['_last_seen']) || !is_int($_SESSION['_last_seen'])) {
+        $_SESSION['_last_seen'] = time();
+    }
+
+    _auth_session_runtime_checks();
+}
+
+/** Internal: enforce idle timeout + periodic rotation */
+function _auth_session_runtime_checks(): void
+{
+    // Idle timeout (only meaningful after login; still safe to apply broadly)
+    if (AUTH_IDLE_TIMEOUT > 0 && isset($_SESSION['_last_seen']) && is_int($_SESSION['_last_seen'])) {
+        $idle = time() - $_SESSION['_last_seen'];
+        if ($idle > AUTH_IDLE_TIMEOUT) {
+            admin_logout_session();
+            http_response_code(401);
+            echo 'Session expired.';
+            exit;
+        }
+    }
+    $_SESSION['_last_seen'] = time();
+
+    // Rotate session id periodically *after authentication exists*
+    if (AUTH_ROTATE_INTERVAL > 0 && !empty($_SESSION['admin_id'])) {
+        $rot = (int)($_SESSION['_last_rot'] ?? 0);
+        if ($rot <= 0) {
+            $_SESSION['_last_rot'] = time();
+        } elseif ((time() - $rot) >= AUTH_ROTATE_INTERVAL) {
+            session_regenerate_id(true);
+            $_SESSION['_last_rot'] = time();
+        }
+    }
 }
 
 // ------------------------------------------------------------
@@ -53,10 +158,21 @@ function csrf_token(): string
 {
     session_start_secure();
 
-    if (empty($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token']) || strlen($_SESSION['csrf_token']) < 32) {
+    if (
+        empty($_SESSION['csrf_token']) ||
+        !is_string($_SESSION['csrf_token']) ||
+        strlen($_SESSION['csrf_token']) < 32
+    ) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     }
     return $_SESSION['csrf_token'];
+}
+
+/** Convenience: hidden input field */
+function csrf_field(string $name = 'csrf'): string
+{
+    $t = csrf_token();
+    return '<input type="hidden" name="' . h_attr($name) . '" value="' . h_attr($t) . '">';
 }
 
 /**
@@ -64,6 +180,7 @@ function csrf_token(): string
  * Supports:
  * - POST field (default name "csrf")
  * - AJAX header: X-CSRF-Token
+ * - JSON body: { "csrf": "..." } when Content-Type: application/json
  */
 function verify_csrf(string $field = 'csrf'): void
 {
@@ -74,26 +191,35 @@ function verify_csrf(string $field = 'csrf'): void
         return;
     }
 
-    $sent = null;
+    $sent = '';
 
     // Form field
     if (isset($_POST[$field])) {
-        $sent = $_POST[$field];
+        $sent = is_string($_POST[$field]) ? $_POST[$field] : '';
     }
 
     // AJAX header support
-    if ($sent === null || $sent === '') {
-        $sent = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if ($sent === '') {
+        $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+        $sent = is_string($hdr) ? $hdr : '';
+    }
+
+    // JSON body support (if still empty)
+    if ($sent === '') {
+        $ct = strtolower((string)($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? ''));
+        if (str_contains($ct, 'application/json')) {
+            $raw = file_get_contents('php://input');
+            if (is_string($raw) && $raw !== '') {
+                $data = json_decode($raw, true);
+                if (is_array($data) && isset($data[$field]) && is_string($data[$field])) {
+                    $sent = $data[$field];
+                }
+            }
+        }
     }
 
     $sess = $_SESSION['csrf_token'] ?? '';
-
-    if (!is_string($sent)) {
-        $sent = '';
-    }
-    if (!is_string($sess)) {
-        $sess = '';
-    }
+    $sess = is_string($sess) ? $sess : '';
 
     if ($sent === '' || $sess === '' || !hash_equals($sess, $sent)) {
         http_response_code(419);
@@ -135,7 +261,10 @@ function require_admin(): void
     session_start_secure();
 
     if (empty($_SESSION['admin_id'])) {
-        $to = $_SERVER['REQUEST_URI'] ?? '/admin/dashboard.php';
+        $to = (string)($_SERVER['REQUEST_URI'] ?? '/admin/dashboard.php');
+        // Only allow local paths in "next"
+        $to = safe_next_url($to, '/admin/dashboard.php');
+
         header('Location: /admin/login.php?next=' . rawurlencode($to));
         exit;
     }
@@ -196,8 +325,35 @@ function h_attr(mixed $s): string
 }
 
 // ------------------------------------------------------------
-// Optional: login helper to harden sessions after auth
-// (Use this in /admin/login.php after verifying password.)
+// Optional: safe "next" URL helper (avoid open redirects)
+// ------------------------------------------------------------
+
+/**
+ * Ensures a redirect target is a local path beginning with "/".
+ * Rejects absolute URLs and protocol-relative URLs ("//evil.com").
+ */
+function safe_next_url(string $candidate, string $fallback = '/admin/dashboard.php'): string
+{
+    $candidate = trim($candidate);
+    if ($candidate === '') {
+        return $fallback;
+    }
+
+    // Must start with a single "/" and not with "//"
+    if ($candidate[0] !== '/' || (isset($candidate[1]) && $candidate[0] === '/' && $candidate[1] === '/')) {
+        return $fallback;
+    }
+
+    // Optionally: prevent control chars
+    if (preg_match('/[\x00-\x1F\x7F]/', $candidate)) {
+        return $fallback;
+    }
+
+    return $candidate;
+}
+
+// ------------------------------------------------------------
+// Login/Logout helpers
 // ------------------------------------------------------------
 
 /**
@@ -213,20 +369,38 @@ function admin_login_session(int $id, string $role, string $login): void
     $_SESSION['admin_role'] = $role;
     $_SESSION['admin_login'] = $login;
 
+    // Ensure CSRF exists early
+    csrf_token();
+
     // Prevent session fixation
     session_regenerate_id(true);
+
+    // Reset timers
+    $_SESSION['_last_seen'] = time();
+    $_SESSION['_last_rot']  = time();
 }
 
 /** Logout helper */
 function admin_logout_session(): void
 {
-    session_start_secure();
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        // Start session to properly clear cookie (safe even if not logged in)
+        session_start_secure();
+    }
 
     $_SESSION = [];
 
     if (ini_get('session.use_cookies')) {
-        $params = session_get_cookie_params();
-        setcookie(session_name(), '', time() - 42000, $params['path'] ?? '/', $params['domain'] ?? '', (bool)($params['secure'] ?? false), true);
+        $p = session_get_cookie_params();
+        // Expire cookie with same parameters to ensure browser removes it
+        setcookie(session_name(), '', [
+            'expires'  => time() - 42000,
+            'path'     => $p['path'] ?? '/',
+            'domain'   => $p['domain'] ?? '',
+            'secure'   => (bool)($p['secure'] ?? false),
+            'httponly' => true,
+            'samesite' => $p['samesite'] ?? 'Lax',
+        ]);
     }
 
     session_destroy();

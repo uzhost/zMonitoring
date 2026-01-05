@@ -1,5 +1,6 @@
 <?php
 // admin/login.php — Admin authentication (admins table) — unified header/footer mode
+// DROP-IN: Enforces admin level access. Only level 1 and 2 may sign in.
 
 declare(strict_types=1);
 
@@ -29,6 +30,9 @@ if (!empty($_SESSION['admin_id'])) {
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_WINDOW_SEC   = 10 * 60;
 const LOGIN_LOCK_SEC     = 10 * 60;
+
+// Admin level access (ONLY these can log in here)
+const ADMIN_ALLOWED_LEVELS = [1, 2];
 
 $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '');
 $apcuOk = function_exists('apcu_fetch') && (bool)ini_get('apc.enabled');
@@ -71,6 +75,7 @@ $locked = _is_locked($_SESSION['_login_attempts'], LOGIN_MAX_ATTEMPTS, LOGIN_WIN
 
 $error = null;
 $loginValue = '';
+// Dummy hash (timing mitigation)
 $dummyHash = '$2y$10$wH5XwC8b7l8f4yq4oD6e5eYc1o9g8i7h6j5k4l3m2n1o0p9q8r7s6';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -89,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = 'Please enter login and password.';
         } else {
             $stmt = $pdo->prepare(
-                'SELECT id, login, password_hash, role, is_active
+                'SELECT id, login, password_hash, role, level, is_active
                  FROM admins
                  WHERE login = :login
                  LIMIT 1'
@@ -97,11 +102,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute(['login' => $login]);
             $admin = $stmt->fetch(PDO::FETCH_ASSOC);
 
-            $hash = $dummyHash;
+            $hash     = $dummyHash;
             $isActive = false;
+            $level    = 0;
 
             if (is_array($admin)) {
                 $isActive = ((int)($admin['is_active'] ?? 0) === 1);
+                $level    = (int)($admin['level'] ?? 0);
+
                 if (!empty($admin['password_hash']) && is_string($admin['password_hash'])) {
                     $hash = $admin['password_hash'];
                 }
@@ -112,6 +120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $ok = is_array($admin)
                 && $isActive
                 && $passOk
+                && in_array($level, ADMIN_ALLOWED_LEVELS, true)
                 && isset($admin['id'], $admin['role'], $admin['login']);
 
             if (!$ok) {
@@ -121,12 +130,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     apcu_store($ipKey, $ipAttempts, LOGIN_WINDOW_SEC + LOGIN_LOCK_SEC);
                 }
                 usleep(200_000);
-                $error = 'Invalid credentials.';
+                // Do not leak whether it's credentials, inactive, or insufficient level
+                $error = 'Invalid credentials or insufficient permissions.';
             } else {
                 $_SESSION['_login_attempts'] = [];
                 if ($apcuOk) apcu_delete($ipKey);
 
+                // Keep compatibility with your existing auth.php signature.
+                // Store level in tolerant shapes so all pages can read it consistently.
                 admin_login_session((int)$admin['id'], (string)$admin['role'], (string)$admin['login']);
+
+                $_SESSION['admin_level'] = $level;
+                $_SESSION['level'] = $level;
+                if (!isset($_SESSION['admin']) || !is_array($_SESSION['admin'])) {
+                    $_SESSION['admin'] = [];
+                }
+                $_SESSION['admin']['level'] = $level;
+                $_SESSION['admin']['role']  = (string)$admin['role'];
+                $_SESSION['admin']['login'] = (string)$admin['login'];
+                $_SESSION['admin']['id']    = (int)$admin['id'];
 
                 // Optional: audit update if columns exist (ignore failures)
                 try {
@@ -225,6 +247,7 @@ require_once __DIR__ . '/header.php';
               </div>
               <div class="form-text small-muted">
                 Authorized users only. Access attempts may be logged.
+                <span class="d-block mt-1">Allowed admin levels: <span class="mono">1–2</span>.</span>
               </div>
             </div>
 

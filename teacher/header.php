@@ -13,7 +13,38 @@ $auth_required     = $auth_required     ?? true;
 $show_teacher_nav  = $show_teacher_nav  ?? true;
 $teacher_is_guest  = $teacher_is_guest  ?? (!$auth_required);
 
-// Guard only when not guest
+// -------------------- Determine current admin/teacher level (tolerant) --------------------
+/**
+ * Robustly read admin level from various session shapes.
+ * Expected meanings (per your project):
+ *   Level 1 = superadmin/admin (full control)
+ *   Level 2 = staff/admin (limited)
+ *   Level 3 = viewer/teacher (read-only)
+ */
+$read_admin_level = static function (): int {
+    // Prefer helper if it exists
+    if (function_exists('admin_level')) {
+        try {
+            $lvl = (int)admin_level();
+            if ($lvl > 0) return $lvl;
+        } catch (\Throwable $e) {
+            // ignore; fall back to session
+        }
+    }
+
+    // Common session patterns
+    if (isset($_SESSION['admin']) && is_array($_SESSION['admin']) && isset($_SESSION['admin']['level'])) {
+        return (int)$_SESSION['admin']['level'];
+    }
+    if (isset($_SESSION['admin_level'])) return (int)$_SESSION['admin_level'];
+    if (isset($_SESSION['level'])) return (int)$_SESSION['level'];
+
+    return 0;
+};
+
+$adminLevel = $read_admin_level();
+
+// -------------------- Guard only when not guest --------------------
 if (!$teacher_is_guest && $auth_required) {
     if (function_exists('require_teacher')) {
         require_teacher(); // preferred (level 3, redirects to /teacher/login.php)
@@ -24,20 +55,21 @@ if (!$teacher_is_guest && $auth_required) {
             header('Location: /teacher/login.php?next=' . rawurlencode($to));
             exit;
         }
-        $lvl = null;
-        if (isset($_SESSION['admin']) && is_array($_SESSION['admin']) && isset($_SESSION['admin']['level'])) {
-            $lvl = (int)$_SESSION['admin']['level'];
-        } elseif (isset($_SESSION['admin_level'])) {
-            $lvl = (int)$_SESSION['admin_level'];
-        } elseif (isset($_SESSION['level'])) {
-            $lvl = (int)$_SESSION['level'];
-        }
-        if (($lvl ?? 0) !== 3) {
+
+        // Re-read in case session was set during require/auth
+        $adminLevel = $read_admin_level();
+
+        if (($adminLevel ?? 0) !== 3) {
             http_response_code(403);
             echo 'Forbidden.';
             exit;
         }
     }
+}
+
+// If we are not guest and logged in, normalize displayed level (should be 3 on teacher portal)
+if (!$teacher_is_guest && $auth_required && $adminLevel <= 0) {
+    $adminLevel = 3;
 }
 
 // -------------------- Page metadata --------------------
@@ -81,6 +113,21 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 header('X-Frame-Options: SAMEORIGIN');
 header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 
+// -------------------- Level label helpers --------------------
+$levelLabel = match ((int)$adminLevel) {
+    1 => 'Level 1',
+    2 => 'Level 2',
+    3 => 'Level 3',
+    default => 'Level —',
+};
+
+$levelRoleLabel = match ((int)$adminLevel) {
+    1 => 'Admin',
+    2 => 'Staff',
+    3 => 'Viewer',
+    default => 'User',
+};
+
 ?>
 <!doctype html>
 <html lang="en">
@@ -104,7 +151,7 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
   <link href="/assets/admin.css" rel="stylesheet">
 
   <?php if ($isGuest): ?>
-    <style>
+    <style nonce="<?= h($cspNonce) ?>">
       body{
         min-height:100vh;
         background:
@@ -169,6 +216,18 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
         background: rgba(255,255,255,.08);
       }
       .user-chip i{ opacity:.9; }
+      .level-pill{
+        display:inline-flex;
+        align-items:center;
+        gap:.35rem;
+        padding:.25rem .55rem;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        font-size: .78rem;
+        line-height: 1;
+        white-space: nowrap;
+      }
     </style>
   <?php endif; ?>
 </head>
@@ -188,8 +247,10 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
         <i class="bi bi-person-badge"></i>
       </span>
       <span>Teacher Portal</span>
-      <span class="badge text-bg-secondary-subtle border text-secondary-emphasis ms-1 d-none d-md-inline">
-        Level 3
+
+      <!-- FIX: show REAL level, and do not hide on small screens -->
+      <span class="level-pill ms-1" title="<?= h($levelRoleLabel) ?>">
+        <i class="bi bi-shield-lock"></i> <?= h($levelLabel) ?>
       </span>
     </a>
 
@@ -208,7 +269,10 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
           </a>
         </li>
 
-        <div class="nav-divider"></div>
+        <!-- FIX: valid markup inside <ul> -->
+        <li class="nav-item d-none d-lg-flex align-items-stretch" aria-hidden="true">
+          <span class="nav-divider"></span>
+        </li>
 
         <!-- Class dropdown -->
         <li class="nav-item dropdown">
@@ -232,9 +296,16 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
         </li>
 
         <li class="nav-item">
+          <a class="nav-link<?= $active('compare.php') ?>" href="/teacher/compare.php"
+             aria-current="<?= $current === 'compare.php' ? 'page' : 'false' ?>">
+            <i class="bi bi-bar-chart-line me-1"></i> Comparison
+          </a>
+        </li>
+
+        <li class="nav-item">
           <a class="nav-link<?= $active('reports.php') ?>" href="/teacher/reports.php"
              aria-current="<?= $current === 'reports.php' ? 'page' : 'false' ?>">
-            <i class="bi bi-bar-chart-line me-1"></i> Reports
+            <i class="bi bi-graph-up-arrow me-1"></i> Reports
           </a>
         </li>
 
@@ -244,6 +315,9 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
         <div class="user-chip text-light small d-none d-lg-inline-flex" title="Signed in user">
           <i class="bi bi-person-circle"></i>
           <span class="text-truncate" style="max-width: 220px;"><?= h($userLogin !== '' ? $userLogin : 'Teacher') ?></span>
+          <span class="badge text-bg-light text-dark ms-1" title="<?= h($levelRoleLabel) ?>">
+            <?= h($levelLabel) ?>
+          </span>
         </div>
 
         <a href="/teacher/logout.php" class="btn btn-outline-light btn-sm">
@@ -261,8 +335,13 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
     <div class="d-flex align-items-center gap-2">
       <h1 class="h4 mb-0"><?= h($pageTitle) ?></h1>
+
+      <!-- FIX: show role + level clearly in the page header -->
+      <span class="badge text-bg-secondary-subtle border text-secondary-emphasis" title="<?= h($levelRoleLabel) ?>">
+        <i class="bi bi-eye me-1"></i> <?= h($levelRoleLabel) ?>
+      </span>
       <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">
-        <i class="bi bi-eye me-1"></i> Teacher
+        <i class="bi bi-shield-check me-1"></i> <?= h($levelLabel) ?>
       </span>
     </div>
 

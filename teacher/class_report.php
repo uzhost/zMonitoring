@@ -4,7 +4,6 @@
 //  - Subjects list shows ONLY subjects that the selected class/group actually has results for (no zero rows)
 //  - Scope: This class / All parallels (same grade) / Parallels by track (same grade + track)
 //  - class_code format supported: "5 - A" (also tolerates "5-A", "5 -A", "5- A", and dash variants)
-//  - NEW: Class-group comparison card (pupils.class_group) below Subject-by-subject matrix
 //
 // Requires:
 //   /inc/auth.php, /inc/db.php, /admin/header.php, /admin/footer.php
@@ -104,8 +103,8 @@ $classes = $pdo->query(
 
 $trackOptions = [
     '' => 'All tracks',
-    'Aniq fanlar' => 'Aniq fanlar',
-    'Tabiiy fanlar' => 'Tabiiy fanlar',
+    'Aniq' => 'Aniq',
+    'Tabiiy' => 'Tabiiy',
 ];
 
 $scopeOptions = [
@@ -299,6 +298,57 @@ if ($canRun && $hasExams && $selectedClasses) {
         ];
     }
 
+// ------------------------------
+// Group-by-term-by-subject comparison (class_group 1 vs 2)
+// ------------------------------
+$groupAgg = []; // [subject_id][exam_id][group] => stats
+
+if ($canRun && $hasExams && $selectedClasses) {
+    $inExams   = implode(',', array_fill(0, count($examIds), '?'));
+    $inClasses = implode(',', array_fill(0, count($selectedClasses), '?'));
+
+    $sql = "
+        SELECT
+            r.exam_id,
+            r.subject_id,
+            p.class_group,
+            COUNT(*)                  AS n,
+            AVG(r.score)              AS avg_score,
+            SUM(r.score >= ?)         AS pass_n
+        FROM results r
+        INNER JOIN pupils p ON p.id = r.pupil_id
+        WHERE p.class_code IN ($inClasses)
+          AND p.class_group IN (1,2)
+          AND (? = '' OR p.track = ?)
+          AND r.exam_id IN ($inExams)
+        GROUP BY r.exam_id, r.subject_id, p.class_group
+    ";
+
+    $params = array_merge(
+        [$PASS],
+        $selectedClasses,
+        [$selectedTrack, $selectedTrack],
+        $examIds
+    );
+
+    $st = $pdo->prepare($sql);
+    $st->execute($params);
+
+    foreach ($st->fetchAll() as $row) {
+        $eid = (int)$row['exam_id'];
+        $sid = (int)$row['subject_id'];
+        $grp = (int)$row['class_group'];
+        $n   = (int)$row['n'];
+
+        $groupAgg[$sid][$eid][$grp] = [
+            'n'    => $n,
+            'avg'  => $row['avg_score'] !== null ? (float)$row['avg_score'] : null,
+            'pass' => $n > 0 ? ((int)$row['pass_n'] / $n * 100.0) : null,
+        ];
+    }
+}
+
+
     // Medians (PHP): load scores once
     $sql = "SELECT r.exam_id, r.subject_id, r.score
             FROM results r
@@ -330,112 +380,6 @@ if ($canRun && $hasExams && $selectedClasses) {
     foreach ($overallScores as $eid => $list) {
         if (!isset($overall[(int)$eid])) continue;
         $overall[(int)$eid]['median'] = median($list);
-    }
-}
-
-// ------------------------------
-// NEW: Group-by-class_group comparison (overall across subjects)
-// ------------------------------
-$classGroups = []; // list rows: ['class_code'=>..., 'class_group'=>..., 'key'=>..., 'label'=>...]
-$groupAgg = [];    // [key][exam_id] => stats (avg, median, pass, n)
-if ($canRun && $hasExams && $selectedClasses) {
-    $inExams = implode(',', array_fill(0, count($examIds), '?'));
-    $inClasses = implode(',', array_fill(0, count($selectedClasses), '?'));
-
-    // Discover groups that actually have results in this selection
-    $sql = "SELECT DISTINCT
-                  p.class_code,
-                  COALESCE(NULLIF(TRIM(p.class_group), ''), '—') AS class_group
-            FROM results r
-            INNER JOIN pupils p ON p.id = r.pupil_id
-            WHERE p.class_code IN ($inClasses)
-              AND (? = '' OR p.track = ?)
-              AND r.exam_id IN ($inExams)
-            ORDER BY
-              CAST(TRIM(SUBSTRING_INDEX(p.class_code, '-', 1)) AS UNSIGNED),
-              p.class_code,
-              class_group";
-    $params = array_merge($selectedClasses, [$selectedTrack, $selectedTrack], $examIds);
-    $st = $pdo->prepare($sql);
-    $st->execute($params);
-
-    foreach ($st->fetchAll() as $row) {
-        $cc = (string)$row['class_code'];
-        $cg = (string)$row['class_group'];
-        $key = $cc . '||' . $cg;
-        $label = ($scope === 'single') ? $cg : ($cc . ' · ' . $cg);
-        $classGroups[] = [
-            'class_code'  => $cc,
-            'class_group' => $cg,
-            'key'         => $key,
-            'label'       => $label,
-        ];
-    }
-
-    // Aggregates per group/exam
-    $sql = "SELECT
-                p.class_code,
-                COALESCE(NULLIF(TRIM(p.class_group), ''), '—') AS class_group,
-                r.exam_id,
-                COUNT(*) AS n,
-                AVG(r.score) AS avg_score,
-                SUM(CASE WHEN r.score >= ? THEN 1 ELSE 0 END) AS pass_n
-            FROM results r
-            INNER JOIN pupils p ON p.id = r.pupil_id
-            WHERE p.class_code IN ($inClasses)
-              AND (? = '' OR p.track = ?)
-              AND r.exam_id IN ($inExams)
-            GROUP BY p.class_code, class_group, r.exam_id";
-    $params = array_merge([$PASS], $selectedClasses, [$selectedTrack, $selectedTrack], $examIds);
-    $st = $pdo->prepare($sql);
-    $st->execute($params);
-
-    foreach ($st->fetchAll() as $row) {
-        $cc = (string)$row['class_code'];
-        $cg = (string)$row['class_group'];
-        $key = $cc . '||' . $cg;
-        $eid = (int)$row['exam_id'];
-        $n = (int)$row['n'];
-        $passN = (int)$row['pass_n'];
-        $avg = $row['avg_score'] !== null ? (float)$row['avg_score'] : null;
-
-        $groupAgg[$key][$eid] = [
-            'n'      => $n,
-            'avg'    => $avg,
-            'pass'   => $n > 0 ? ($passN / $n * 100.0) : null,
-            'median' => null,
-        ];
-    }
-
-    // Medians per group/exam (PHP)
-    $sql = "SELECT
-                p.class_code,
-                COALESCE(NULLIF(TRIM(p.class_group), ''), '—') AS class_group,
-                r.exam_id,
-                r.score
-            FROM results r
-            INNER JOIN pupils p ON p.id = r.pupil_id
-            WHERE p.class_code IN ($inClasses)
-              AND (? = '' OR p.track = ?)
-              AND r.exam_id IN ($inExams)
-            ORDER BY p.class_code ASC, class_group ASC, r.exam_id ASC, r.score ASC";
-    $params = array_merge($selectedClasses, [$selectedTrack, $selectedTrack], $examIds);
-    $st = $pdo->prepare($sql);
-    $st->execute($params);
-
-    $tmp = []; // [key][eid] => [scores...]
-    while ($r = $st->fetch()) {
-        $cc = (string)$r['class_code'];
-        $cg = (string)$r['class_group'];
-        $key = $cc . '||' . $cg;
-        $eid = (int)$r['exam_id'];
-        $tmp[$key][$eid][] = (float)$r['score'];
-    }
-    foreach ($tmp as $key => $byExam) {
-        foreach ($byExam as $eid => $scoresList) {
-            if (!isset($groupAgg[$key][$eid])) continue;
-            $groupAgg[$key][$eid]['median'] = median($scoresList);
-        }
     }
 }
 
@@ -681,159 +625,182 @@ $examLabel = static function (array $e): string {
     </div>
 
     <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-          <div class="fw-semibold">
-            <i class="bi bi-table me-2"></i>Subject-by-subject matrix
-            <span class="badge text-bg-light text-dark border ms-2">Readable view</span>
-          </div>
-          <div class="small text-muted">
-            Each cell: <span class="fw-semibold">avg</span> (Δ) · median · pass% · min–max · sd
-          </div>
-        </div>
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+      <div class="fw-semibold">
+        <i class="bi bi-table me-2"></i>Subject-by-subject matrix
+        <span class="badge text-bg-light text-dark border ms-2">Readable view</span>
+      </div>
+      <div class="small text-muted">
+        Each cell: <span class="fw-semibold">avg</span> (Δ) · median · pass% · min–max · sd
+      </div>
+    </div>
 
-        <!-- Inline styles scoped to this card only -->
-        <style>
-          .matrix-wrap{
-            border: 1px solid rgba(0,0,0,.08);
-            border-radius: .75rem;
-            overflow: auto;
-            max-height: 76vh;
-            background: #fff;
-          }
-          .matrix-table{
-            min-width: 980px;
-            margin: 0;
-          }
-          .matrix-table thead th{
-            position: sticky;
-            top: 0;
-            z-index: 3;
-            background: #f8f9fa;
-            border-bottom: 1px solid rgba(0,0,0,.12);
-            vertical-align: bottom;
-            text-align: center;
-          }
-          .matrix-table th.subject-col{
-            position: sticky;
-            left: 0;
-            z-index: 4;
-            background: #f8f9fa;
-            border-right: 1px solid rgba(0,0,0,.12);
-            min-width: 240px;
-            text-align: left;
-          }
-          .matrix-table td.subject-col{
-            position: sticky;
-            left: 0;
-            z-index: 2;
-            background: #ffffff;
-            border-right: 1px solid rgba(0,0,0,.12);
-          }
-          .matrix-table td{
-            background: #fff;
-          }
-          .matrix-table tbody tr:nth-child(odd) td:not(.subject-col){
-            background: rgba(13,110,253,.03);
-          }
-          .exam-head{
-            line-height: 1.1;
-          }
-          .cell-box{
-            padding: .45rem .5rem;
-            border-radius: .5rem;
-            background: rgba(0,0,0,.02);
-            border: 1px solid rgba(0,0,0,.06);
-          }
-          .cell-top{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: .5rem;
-            margin-bottom: .35rem;
-          }
-          .cell-kv{
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: .15rem .5rem;
-            font-size: .8125rem;
-            line-height: 1.25;
-          }
-          .kv-k{
-            color: #6c757d;
-            white-space: nowrap;
-          }
-          .kv-v{
-            font-variant-numeric: tabular-nums;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            white-space: nowrap;
-            text-align: right;
-          }
-          .badge.mono{
-            font-variant-numeric: tabular-nums;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-          }
-          .n-pill{
-            font-size: .75rem;
-            padding: .1rem .4rem;
-            border-radius: 999px;
-            background: rgba(0,0,0,.06);
-            color: #495057;
-            font-variant-numeric: tabular-nums;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-          }
-          .muted-dash{
-            padding: .4rem .5rem;
-            color: #6c757d;
-            background: rgba(0,0,0,.02);
-            border: 1px dashed rgba(0,0,0,.15);
-            border-radius: .5rem;
-            text-align: center;
-          }
-        </style>
+    <!-- Inline styles scoped to this card only -->
+    <style>
+      .matrix-wrap{
+        border: 1px solid rgba(0,0,0,.08);
+        border-radius: .75rem;
+        overflow: auto;
+        max-height: 76vh;
+        background: #fff;
+      }
+      .matrix-table{
+        min-width: 980px;
+        margin: 0;
+      }
+      .matrix-table thead th{
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: #f8f9fa;
+        border-bottom: 1px solid rgba(0,0,0,.12);
+        vertical-align: bottom;
+      }
+      .matrix-table th.subject-col{
+        position: sticky;
+        left: 0;
+        z-index: 4;
+        background: #f8f9fa;
+        border-right: 1px solid rgba(0,0,0,.12);
+        min-width: 240px;
+      }
+      .matrix-table td.subject-col{
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        background: #ffffff;
+        border-right: 1px solid rgba(0,0,0,.12);
+      }
+      .matrix-table td{
+        background: #fff;
+      }
+      .matrix-table tbody tr:nth-child(odd) td:not(.subject-col){
+        background: rgba(13,110,253,.03);
+      }
+      .exam-head{
+        line-height: 1.1;
+      }
+      .cell-box{
+        padding: .45rem .5rem;
+        border-radius: .5rem;
+        background: rgba(0,0,0,.02);
+        border: 1px solid rgba(0,0,0,.06);
+      }
+      .cell-top{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: .5rem;
+        margin-bottom: .35rem;
+      }
+      .cell-kv{
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: .15rem .5rem;
+        font-size: .8125rem;
+        line-height: 1.25;
+      }
+      .kv-k{
+        color: #6c757d;
+        white-space: nowrap;
+      }
+      .kv-v{
+        font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        white-space: nowrap;
+        text-align: right;
+      }
+      .badge.mono{
+        font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .n-pill{
+        font-size: .75rem;
+        padding: .1rem .4rem;
+        border-radius: 999px;
+        background: rgba(0,0,0,.06);
+        color: #495057;
+        font-variant-numeric: tabular-nums;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      .muted-dash{
+        padding: .4rem .5rem;
+        color: #6c757d;
+        background: rgba(0,0,0,.02);
+        border: 1px dashed rgba(0,0,0,.15);
+        border-radius: .5rem;
+        text-align: center;
+      }
+     /* Subject column: match KPI cell style (same as other columns) */
+.subject-cell{
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 96px;       /* aligns with typical KPI cell height */
+  text-align: left;       /* same visual rhythm as data */
+}
 
-        <div class="matrix-wrap mt-2">
-          <table class="table table-sm table-bordered align-middle matrix-table">
-            <thead>
-              <tr>
-                <th class="subject-col">Subject</th>
-                <?php foreach ($exams as $e): ?>
-                  <th style="min-width: 280px;">
-                    <div class="exam-head fw-semibold">
-                      <?= h($e['term'] === null ? (string)$e['exam_name'] : ('Term ' . (int)$e['term'])) ?>
-                    </div>
-                    <div class="text-muted small"><?= h($e['exam_date'] ?? '') ?></div>
-                  </th>
-                <?php endforeach; ?>
-              </tr>
-            </thead>
+.subject-title{
+  font-weight: 600;
+  line-height: 1.2;
+}
 
-            <tbody>
-            <?php foreach ($subjects as $s): ?>
-              <?php
-                $sid = (int)$s['id'];
-                $prev = null;
-              ?>
-              <tr>
-                <td class="subject-col">
-                  <div class="cell-box">
-                    <div class="fw-semibold"><?= h((string)$s['name']) ?></div>
-                  </div>
-                </td>
+.subject-sub{
+  margin-top: .2rem;
+}
 
-                <?php foreach ($exams as $e): ?>
+.matrix-table thead th{
+  text-align: center;
+}
+    </style>
+
+    <div class="matrix-wrap mt-2">
+      <table class="table table-sm table-bordered align-middle matrix-table">
+        <thead>
+          <tr>
+                    <th class="subject-col">Subject</th>
+                    <?php foreach ($exams as $e): ?>
+                      <th style="min-width: 280px;">
+                        <div class="exam-head fw-semibold">
+                          <?= h($e['term'] === null ? (string)$e['exam_name'] : ('Term ' . (int)$e['term'])) ?>
+                        </div>
+                        <div class="text-muted small"><?= h($e['exam_date'] ?? '') ?></div>
+                      </th>
+                    <?php endforeach; ?>
+                  </tr>
+                </thead>
+        
+                <tbody>
+                <?php foreach ($subjects as $s): ?>
                   <?php
-                    $eid = (int)$e['id'];
-                    $stt = $agg[$sid][$eid] ?? null;
-
-                    $avg = $stt['avg'] ?? null;
-                    $delta = ($avg !== null && $prev !== null) ? ($avg - $prev) : null;
-                    [$dCls, $dIc, $dTxt] = delta_badge($delta);
-                    $avgCls = score_badge_class($avg, $PASS, $GOOD, $EXCELLENT);
+                    $sid = (int)$s['id'];
+                    $prev = null;
                   ?>
-                  <td>
-                    <?php if (!$stt): ?>
-                      <div class="muted-dash">—</div>
+                  <tr>
+        <td>
+          <div class="cell-box subject-empty">
+            <div class="cell-top justify-content-center">
+              <span class="fw-semibold">
+                <?= h((string)$s['name']) ?><br>
+              </span>
+            </div>
+            </div>
+        </td>
+
+            <?php foreach ($exams as $e): ?>
+              <?php
+                $eid = (int)$e['id'];
+                $stt = $agg[$sid][$eid] ?? null;
+
+                $avg = $stt['avg'] ?? null;
+                $delta = ($avg !== null && $prev !== null) ? ($avg - $prev) : null;
+                [$dCls, $dIc, $dTxt] = delta_badge($delta);
+                $avgCls = score_badge_class($avg, $PASS, $GOOD, $EXCELLENT);
+              ?>
+              <td>
+                <?php if (!$stt): ?>
+                  <div class="muted-dash">—</div>
                     <?php else: ?>
                       <div class="cell-box">
                         <div class="cell-top">
@@ -847,219 +814,248 @@ $examLabel = static function (array $e): string {
                           </div>
                           <span class="n-pill">N <?= h((string)$stt['n']) ?></span>
                         </div>
-
+    
                         <div class="cell-kv">
-                          <div class="kv-k">median</div>
-                          <div class="kv-v"><?= h(fmt1($stt['median'])) ?></div>
-
                           <div class="kv-k">pass</div>
                           <div class="kv-v"><?= h(fmtPct($stt['pass'])) ?></div>
-
+    
                           <div class="kv-k">min–max</div>
                           <div class="kv-v"><?= h(fmt1($stt['min'])) ?>–<?= h(fmt1($stt['max'])) ?></div>
-
+    
                           <div class="kv-k">sd</div>
                           <div class="kv-v"><?= h(fmt2($stt['sd'])) ?></div>
+                    </div>
+                  </div>
+
+                  <?php if ($avg !== null) $prev = $avg; ?>
+                <?php endif; ?>
+              </td>
+            <?php endforeach; ?>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="small text-muted mt-2">
+      <i class="bi bi-info-circle me-1"></i>
+      Subjects are limited to those with actual results for the selected group/year.
+      Pass% = share of results where score ≥ <?= h(fmt1($PASS)) ?>.
+      Deltas compare averages to the previous exam (ordered by term/date).
+      <span class="ms-2">Tip: scroll inside the box; headers and the Subject column stay visible.</span>
+    </div>
+  </div>
+</div>
+
+<?php if (!empty($groupAgg)): ?>
+  <div class="card shadow-sm mt-3">
+    <div class="card-body">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+        <div class="fw-semibold">
+          <i class="bi bi-diagram-3 me-2"></i>Group comparison matrix
+          <span class="badge text-bg-light text-dark border ms-2">Term-by-term · Subject-by-subject</span>
+        </div>
+        <div class="small text-muted">
+          Each cell shows <span class="fw-semibold">G1</span> vs <span class="fw-semibold">G2</span> (avg · pass · N) and Δ = G2 − G1
+        </div>
+      </div>
+
+      <style>
+        .gmx-wrap{
+          border: 1px solid rgba(0,0,0,.08);
+          border-radius: .75rem;
+          overflow: auto;
+          max-height: 76vh;
+          background: #fff;
+        }
+        .gmx-table{
+          min-width: 980px;
+          margin: 0;
+        }
+        .gmx-table thead th{
+          position: sticky;
+          top: 0;
+          z-index: 3;
+          background: #f8f9fa;
+          border-bottom: 1px solid rgba(0,0,0,.12);
+          vertical-align: bottom;
+          text-align: center;
+        }
+        .gmx-table th.subject-col{
+          position: sticky;
+          left: 0;
+          z-index: 4;
+          background: #f8f9fa;
+          border-right: 1px solid rgba(0,0,0,.12);
+          min-width: 240px;
+          text-align: left;
+        }
+        .gmx-table td.subject-col{
+          position: sticky;
+          left: 0;
+          z-index: 2;
+          background: #fff;
+          border-right: 1px solid rgba(0,0,0,.12);
+        }
+        .gmx-table tbody tr:nth-child(odd) td:not(.subject-col){
+          background: rgba(13,110,253,.03);
+        }
+        .gmx-cell{
+          padding: .5rem;
+          border-radius: .65rem;
+          border: 1px solid rgba(0,0,0,.06);
+          background: rgba(0,0,0,.02);
+        }
+        .gmx-top{
+          display:flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: .5rem;
+          margin-bottom: .4rem;
+        }
+        .gmx-split{
+          display:grid;
+          grid-template-columns: 1fr 1fr;
+          gap: .4rem;
+        }
+        .gmx-side{
+          border: 1px solid rgba(0,0,0,.06);
+          border-radius: .55rem;
+          padding: .35rem .4rem;
+          background: rgba(255,255,255,.65);
+          min-width: 0;
+        }
+        .gmx-side .lbl{
+          font-size: .72rem;
+          color: #6c757d;
+          display:flex;
+          justify-content: space-between;
+          gap: .35rem;
+          margin-bottom: .15rem;
+        }
+        .gmx-side .val{
+          display:flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: .4rem;
+          flex-wrap: wrap;
+        }
+        .gmx-side .mini{
+          font-size: .75rem;
+          color: #6c757d;
+          font-variant-numeric: tabular-nums;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+        }
+        .gmx-dash{
+          padding: .55rem .6rem;
+          color: #6c757d;
+          background: rgba(0,0,0,.02);
+          border: 1px dashed rgba(0,0,0,.15);
+          border-radius: .65rem;
+          text-align: center;
+        }
+      </style>
+
+      <div class="gmx-wrap mt-2">
+        <table class="table table-sm table-bordered align-middle gmx-table">
+          <thead>
+            <tr>
+              <th class="subject-col">Subject</th>
+              <?php foreach ($exams as $e): ?>
+                <th style="min-width: 320px;">
+                  <div class="fw-semibold">
+                    <?= h($e['term'] === null ? (string)$e['exam_name'] : ('Term ' . (int)$e['term'])) ?>
+                  </div>
+                  <div class="text-muted small"><?= h($e['exam_date'] ?? '') ?></div>
+                </th>
+              <?php endforeach; ?>
+            </tr>
+          </thead>
+
+          <tbody>
+            <?php foreach ($subjects as $s): ?>
+              <?php $sid = (int)$s['id']; ?>
+              <tr>
+                <td class="subject-col">
+                  <div class="cell-box">
+                    <div class="fw-semibold"><?= h((string)$s['name']) ?></div>
+                    <div class="text-muted small">max <?= h((string)$s['max_points']) ?></div>
+                  </div>
+                </td>
+
+                <?php foreach ($exams as $e): ?>
+                  <?php
+                    $eid = (int)$e['id'];
+
+                    $g1 = $groupAgg[$sid][$eid][1] ?? null;
+                    $g2 = $groupAgg[$sid][$eid][2] ?? null;
+
+                    $a1 = $g1['avg'] ?? null;
+                    $a2 = $g2['avg'] ?? null;
+
+                    $delta = ($a1 !== null && $a2 !== null) ? ($a2 - $a1) : null;
+                    [$dCls, $dIc, $dTxt] = delta_badge($delta);
+
+                    $a1Cls = score_badge_class($a1, $PASS, $GOOD, $EXCELLENT);
+                    $a2Cls = score_badge_class($a2, $PASS, $GOOD, $EXCELLENT);
+                  ?>
+
+                  <td>
+                    <?php if (!$g1 && !$g2): ?>
+                      <div class="gmx-dash">—</div>
+                    <?php else: ?>
+                      <div class="gmx-cell">
+                        <div class="gmx-top">
+                          <div class="small text-muted">Δ (Group 2 − Group 1)</div>
+                          <span class="badge <?= h_attr($dCls) ?> mono">
+                            <i class="bi <?= h_attr($dIc) ?> me-1"></i><?= h($dTxt) ?>
+                          </span>
+                        </div>
+
+                        <div class="gmx-split">
+                          <div class="gmx-side">
+                            <div class="lbl">
+                              <span class="fw-semibold">Group 1</span>
+                              <span class="mini"><?= $g1 ? 'N ' . h((string)$g1['n']) : 'N —' ?></span>
+                            </div>
+                            <div class="val">
+                              <span class="badge <?= h_attr($a1Cls) ?> mono"><?= h(fmt1($a1)) ?></span>
+                              <span class="mini">pass <?= h(fmtPct($g1['pass'] ?? null)) ?></span>
+                            </div>
+                          </div>
+
+                          <div class="gmx-side">
+                            <div class="lbl">
+                              <span class="fw-semibold">Group 2</span>
+                              <span class="mini"><?= $g2 ? 'N ' . h((string)$g2['n']) : 'N —' ?></span>
+                            </div>
+                            <div class="val">
+                              <span class="badge <?= h_attr($a2Cls) ?> mono"><?= h(fmt1($a2)) ?></span>
+                              <span class="mini">pass <?= h(fmtPct($g2['pass'] ?? null)) ?></span>
+                            </div>
+                          </div>
                         </div>
                       </div>
-
-                      <?php if ($avg !== null) $prev = $avg; ?>
                     <?php endif; ?>
                   </td>
                 <?php endforeach; ?>
               </tr>
             <?php endforeach; ?>
-            </tbody>
-          </table>
-        </div>
+          </tbody>
+        </table>
+      </div>
 
-        <div class="small text-muted mt-2">
-          <i class="bi bi-info-circle me-1"></i>
-          Subjects are limited to those with actual results for the selected group/year.
-          Pass% = share of results where score ≥ <?= h(fmt1($PASS)) ?>.
-          Deltas compare averages to the previous exam (ordered by term/date).
-          <span class="ms-2">Tip: scroll inside the box; headers and the Subject column stay visible.</span>
-        </div>
+      <div class="small text-muted mt-2">
+        <i class="bi bi-info-circle me-1"></i>
+        This matrix compares <span class="fw-semibold">class_group 1 vs 2</span> per subject per exam (term/date order).
+        Pass% = score ≥ <?= h(fmt1($PASS)) ?>. Δ is computed only when both groups have data in the same term.
       </div>
     </div>
+  </div>
+<?php endif; ?>
 
-    <!-- NEW CARD: Class group comparison -->
-    <div class="card shadow-sm mt-3">
-      <div class="card-body">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
-          <div class="fw-semibold">
-            <i class="bi bi-diagram-3 me-2"></i>Class group comparison
-            <span class="badge text-bg-light text-dark border ms-2">pupils.class_group</span>
-          </div>
-          <div class="small text-muted">
-            Each cell: <span class="fw-semibold">avg</span> (Δ) · median · pass% · N
-          </div>
-        </div>
 
-        <?php if (!$classGroups): ?>
-          <div class="alert alert-warning mb-0">
-            No class groups found for the selected filters (year/class/scope/track).
-          </div>
-        <?php else: ?>
 
-          <!-- Styles scoped to group matrix only -->
-          <style>
-            .gmat-wrap{
-              border: 1px solid rgba(0,0,0,.08);
-              border-radius: .75rem;
-              overflow: auto;
-              max-height: 60vh;
-              background: #fff;
-            }
-            .gmat-table{
-              min-width: 980px;
-              margin: 0;
-            }
-            .gmat-table thead th{
-              position: sticky;
-              top: 0;
-              z-index: 3;
-              background: #f8f9fa;
-              border-bottom: 1px solid rgba(0,0,0,.12);
-              vertical-align: bottom;
-              text-align: center;
-            }
-            .gmat-table th.gcol{
-              position: sticky;
-              left: 0;
-              z-index: 4;
-              background: #f8f9fa;
-              border-right: 1px solid rgba(0,0,0,.12);
-              min-width: 220px;
-              text-align: left;
-            }
-            .gmat-table td.gcol{
-              position: sticky;
-              left: 0;
-              z-index: 2;
-              background: #ffffff;
-              border-right: 1px solid rgba(0,0,0,.12);
-            }
-            .gmat-table tbody tr:nth-child(odd) td:not(.gcol){
-              background: rgba(25,135,84,.03);
-            }
-            .gcell{
-              padding: .45rem .5rem;
-              border-radius: .5rem;
-              background: rgba(0,0,0,.02);
-              border: 1px solid rgba(0,0,0,.06);
-            }
-            .gcell-top{
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              gap: .5rem;
-              margin-bottom: .35rem;
-            }
-            .gcell-kv{
-              display: grid;
-              grid-template-columns: 1fr auto;
-              gap: .15rem .5rem;
-              font-size: .8125rem;
-              line-height: 1.25;
-            }
-            .gkv-k{ color:#6c757d; white-space:nowrap; }
-            .gkv-v{
-              font-variant-numeric: tabular-nums;
-              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-              white-space: nowrap;
-              text-align:right;
-            }
-          </style>
-
-          <div class="gmat-wrap mt-2">
-            <table class="table table-sm table-bordered align-middle gmat-table">
-              <thead>
-                <tr>
-                  <th class="gcol"><?= $scope === 'single' ? 'Group' : 'Class · Group' ?></th>
-                  <?php foreach ($exams as $e): ?>
-                    <th style="min-width: 260px;">
-                      <div class="fw-semibold">
-                        <?= h($e['term'] === null ? (string)$e['exam_name'] : ('Term ' . (int)$e['term'])) ?>
-                      </div>
-                      <div class="text-muted small"><?= h($e['exam_date'] ?? '') ?></div>
-                    </th>
-                  <?php endforeach; ?>
-                </tr>
-              </thead>
-              <tbody>
-                <?php foreach ($classGroups as $g): ?>
-                  <?php
-                    $key = (string)$g['key'];
-                    $prev = null;
-                  ?>
-                  <tr>
-                    <td class="gcol">
-                      <div class="gcell">
-                        <div class="fw-semibold"><?= h((string)$g['label']) ?></div>
-                        <?php if ($scope === 'single'): ?>
-                          <div class="text-muted small">Within <?= h($selectedClass) ?></div>
-                        <?php else: ?>
-                          <div class="text-muted small">Across selected scope</div>
-                        <?php endif; ?>
-                      </div>
-                    </td>
-
-                    <?php foreach ($exams as $e): ?>
-                      <?php
-                        $eid = (int)$e['id'];
-                        $stt = $groupAgg[$key][$eid] ?? null;
-
-                        $avg = $stt['avg'] ?? null;
-                        $delta = ($avg !== null && $prev !== null) ? ($avg - $prev) : null;
-                        [$dCls, $dIc, $dTxt] = delta_badge($delta);
-                        $avgCls = score_badge_class($avg, $PASS, $GOOD, $EXCELLENT);
-                      ?>
-                      <td>
-                        <?php if (!$stt): ?>
-                          <div class="muted-dash">—</div>
-                        <?php else: ?>
-                          <div class="gcell">
-                            <div class="gcell-top">
-                              <div class="d-flex flex-wrap gap-1 align-items-center">
-                                <span class="badge <?= h_attr($avgCls) ?> mono" style="font-size:.9rem;">
-                                  <?= h(fmt1($avg)) ?>
-                                </span>
-                                <span class="badge <?= h_attr($dCls) ?> mono">
-                                  <i class="bi <?= h_attr($dIc) ?> me-1"></i><?= h($dTxt) ?>
-                                </span>
-                              </div>
-                              <span class="n-pill">N <?= h((string)$stt['n']) ?></span>
-                            </div>
-
-                            <div class="gcell-kv">
-                              <div class="gkv-k">median</div>
-                              <div class="gkv-v"><?= h(fmt1($stt['median'])) ?></div>
-
-                              <div class="gkv-k">pass</div>
-                              <div class="gkv-v"><?= h(fmtPct($stt['pass'])) ?></div>
-                            </div>
-                          </div>
-
-                          <?php if ($avg !== null) $prev = $avg; ?>
-                        <?php endif; ?>
-                      </td>
-                    <?php endforeach; ?>
-                  </tr>
-                <?php endforeach; ?>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="small text-muted mt-2">
-            <i class="bi bi-info-circle me-1"></i>
-            Groups are derived from <span class="mono">pupils.class_group</span> (trimmed). Empty values are shown as <span class="mono">—</span>.
-            Deltas compare each group’s average to its previous exam (same ordering as above).
-          </div>
-
-        <?php endif; ?>
-      </div>
-    </div>
 
   <?php endif; ?>
 </div>

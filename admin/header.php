@@ -28,10 +28,10 @@ $active = static function (string $file) use ($current): string {
 };
 
 // -------------------- Nav groups (for dropdown active state) --------------------
-$importPages = ['pupils_import.php', 'results_import.php', 'subject_import.php', 'subjects.php'];
+$importPages = ['pupils_import.php', 'results_import.php', 'subjects.php'];
 $isImportActive = in_array($current, $importPages, true);
 
-$classPages = ['class_report.php', 'class_pupils.php'];
+$classPages = ['class_report.php', 'class_pupils.php', 'class_group.php'];
 $isClassActive = in_array($current, $classPages, true);
 
 $pupilPages = ['pupils.php', 'pupils_result.php'];
@@ -228,12 +228,17 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
           <ul class="dropdown-menu dropdown-menu-dark shadow-sm">
             <li>
               <a class="dropdown-item<?= $active('class_report.php') ?>" href="class_report.php">
-                <i class="bi bi-clipboard-data me-2"></i> Class reports
+                <i class="bi bi-clipboard-data me-2"></i> Class Reports
               </a>
             </li>
             <li>
               <a class="dropdown-item<?= $active('class_pupils.php') ?>" href="class_pupils.php">
-                <i class="bi bi-table me-2"></i> Class pupils
+                <i class="bi bi-table me-2"></i> Class Pupils
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('class_group.php') ?>" href="class_group.php">
+                <i class="bi bi-table me-2"></i> Class Groups
               </a>
             </li>
           </ul>

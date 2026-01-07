@@ -1,67 +1,47 @@
 <?php
-// inc/auth.php — Admin auth helpers (admins table), hardened sessions + CSRF + RBAC + safe escaping
+// inc/auth.php — Admin auth helpers (admins table), hardened sessions + CSRF + RBAC(levels) + safe escaping
+// DROP-IN ENHANCEMENT (FIXED):
+// - Removes duplicate require_admin_levels() (previously declared twice)
+// - Makes admin_level() tolerant to legacy session shapes
+// - Lets admin_login_session() persist level (optional param, backwards compatible)
+// - Keeps role-based helpers for backward compatibility
+// - Keeps teacher-aware redirect helpers to avoid /teacher -> /admin/login.php loops
 
 declare(strict_types=1);
-
-/**
- * Standalone helpers:
- * - session_start_secure()
- * - csrf_token(), csrf_field(), verify_csrf()
- * - require_admin(), require_role()
- * - admin_id(), admin_role(), admin_login()
- * - admin_login_session(), admin_logout_session()
- * - h() (NULL-safe), h_attr()
- * - safe_next_url()   (optional, for login redirect safety)
- *
- * Assumes admin session keys:
- *   $_SESSION['admin_id'], $_SESSION['admin_role'], $_SESSION['admin_login']
- */
 
 // ------------------------------------------------------------
 // Config knobs (safe defaults)
 // ------------------------------------------------------------
 
-// Idle timeout in seconds (0 disables). Recommend 2–8 hours for admin panels.
-const AUTH_IDLE_TIMEOUT = 6 * 60 * 60; // 6 hours
+const AUTH_IDLE_TIMEOUT    = 6 * 60 * 60; // 6 hours
+const AUTH_ROTATE_INTERVAL = 30 * 60;     // 30 minutes
+const AUTH_BIND_UA         = true;
 
-// Regenerate session id every N seconds while logged-in (0 disables).
-const AUTH_ROTATE_INTERVAL = 30 * 60; // 30 minutes
-
-// Bind session to user agent hash (lightweight anti-hijack). Set false to disable.
-const AUTH_BIND_UA = true;
-
-// Trust proxy HTTPS headers only from these proxy IPs (add your reverse proxy IPs if used).
-// If you are not behind a proxy, leave as localhost only.
 const AUTH_TRUSTED_PROXIES = ['127.0.0.1', '::1'];
+
+// Define level semantics (authoritative)
+const AUTH_LEVEL_SUPERADMIN = 1; // full edit
+const AUTH_LEVEL_ADMIN      = 2; // admin (view-only or limited, depending on page)
+const AUTH_LEVEL_TEACHER    = 3; // viewer/teacher (read-only)
 
 // ------------------------------------------------------------
 // Session (hardened)
 // ------------------------------------------------------------
 
-/** Determine if request is HTTPS, proxy-aware (only if proxy is trusted) */
 function is_https_request(): bool
 {
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
-    if ($https) {
-        return true;
-    }
+    if ($https) return true;
 
     $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
     $behindTrustedProxy = ($remote !== '' && in_array($remote, AUTH_TRUSTED_PROXIES, true));
-    if (!$behindTrustedProxy) {
-        return false;
-    }
+    if (!$behindTrustedProxy) return false;
 
-    // Common proxy headers
     $xfp = strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''));
-    if ($xfp === 'https') {
-        return true;
-    }
+    if ($xfp === 'https') return true;
 
     $cfv = strtolower((string)($_SERVER['HTTP_CF_VISITOR'] ?? ''));
-    if ($cfv !== '' && str_contains($cfv, 'https')) {
-        return true;
-    }
+    if ($cfv !== '' && str_contains($cfv, 'https')) return true;
 
     return false;
 }
@@ -69,20 +49,17 @@ function is_https_request(): bool
 function session_start_secure(): void
 {
     if (session_status() === PHP_SESSION_ACTIVE) {
-        // Still enforce rolling checks if already active
         _auth_session_runtime_checks();
         return;
     }
 
     $secure = is_https_request();
 
-    // Harden session behavior
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
     ini_set('session.sid_length', '48');
     ini_set('session.sid_bits_per_character', '6');
 
-    // Cookie params (set before session_start)
     $params = session_get_cookie_params();
     $cookie = [
         'lifetime' => 0,
@@ -96,14 +73,12 @@ function session_start_secure(): void
 
     session_start();
 
-    // Basic anti-hijack signals
     if (AUTH_BIND_UA) {
         $ua = (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
         $uaHash = hash('sha256', $ua);
         if (empty($_SESSION['_ua_hash'])) {
             $_SESSION['_ua_hash'] = $uaHash;
         } elseif (is_string($_SESSION['_ua_hash']) && !hash_equals($_SESSION['_ua_hash'], $uaHash)) {
-            // UA changed -> invalidate session
             admin_logout_session();
             http_response_code(401);
             echo 'Session invalid.';
@@ -111,7 +86,6 @@ function session_start_secure(): void
         }
     }
 
-    // Initialize timestamps
     if (empty($_SESSION['_created_at']) || !is_int($_SESSION['_created_at'])) {
         $_SESSION['_created_at'] = time();
     }
@@ -122,10 +96,8 @@ function session_start_secure(): void
     _auth_session_runtime_checks();
 }
 
-/** Internal: enforce idle timeout + periodic rotation */
 function _auth_session_runtime_checks(): void
 {
-    // Idle timeout (only meaningful after login; still safe to apply broadly)
     if (AUTH_IDLE_TIMEOUT > 0 && isset($_SESSION['_last_seen']) && is_int($_SESSION['_last_seen'])) {
         $idle = time() - $_SESSION['_last_seen'];
         if ($idle > AUTH_IDLE_TIMEOUT) {
@@ -137,7 +109,6 @@ function _auth_session_runtime_checks(): void
     }
     $_SESSION['_last_seen'] = time();
 
-    // Rotate session id periodically *after authentication exists*
     if (AUTH_ROTATE_INTERVAL > 0 && !empty($_SESSION['admin_id'])) {
         $rot = (int)($_SESSION['_last_rot'] ?? 0);
         if ($rot <= 0) {
@@ -153,7 +124,6 @@ function _auth_session_runtime_checks(): void
 // CSRF
 // ------------------------------------------------------------
 
-/** CSRF: token generator (per session) */
 function csrf_token(): string
 {
     session_start_secure();
@@ -168,20 +138,12 @@ function csrf_token(): string
     return $_SESSION['csrf_token'];
 }
 
-/** Convenience: hidden input field */
 function csrf_field(string $name = 'csrf'): string
 {
     $t = csrf_token();
     return '<input type="hidden" name="' . h_attr($name) . '" value="' . h_attr($t) . '">';
 }
 
-/**
- * CSRF: verify on state-changing methods
- * Supports:
- * - POST field (default name "csrf")
- * - AJAX header: X-CSRF-Token
- * - JSON body: { "csrf": "..." } when Content-Type: application/json
- */
 function verify_csrf(string $field = 'csrf'): void
 {
     session_start_secure();
@@ -193,18 +155,15 @@ function verify_csrf(string $field = 'csrf'): void
 
     $sent = '';
 
-    // Form field
     if (isset($_POST[$field])) {
         $sent = is_string($_POST[$field]) ? $_POST[$field] : '';
     }
 
-    // AJAX header support
     if ($sent === '') {
         $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
         $sent = is_string($hdr) ? $hdr : '';
     }
 
-    // JSON body support (if still empty)
     if ($sent === '') {
         $ct = strtolower((string)($_SERVER['CONTENT_TYPE'] ?? $_SERVER['HTTP_CONTENT_TYPE'] ?? ''));
         if (str_contains($ct, 'application/json')) {
@@ -229,51 +188,200 @@ function verify_csrf(string $field = 'csrf'): void
 }
 
 // ------------------------------------------------------------
-// Auth getters
+// Safe output helpers (NULL-safe)
 // ------------------------------------------------------------
+
+function h(mixed $s): string
+{
+    if ($s === null) return '';
+    if (is_bool($s)) return $s ? '1' : '0';
+    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+function h_attr(mixed $s): string
+{
+    return h($s);
+}
+
+// ------------------------------------------------------------
+// Auth getters (tolerant shapes)
+// ------------------------------------------------------------
+
 function admin_id(): int
 {
     session_start_secure();
-    return (int)($_SESSION['admin_id'] ?? 0);
+    return (int)($_SESSION['admin_id'] ?? ($_SESSION['admin']['id'] ?? 0));
 }
 
 function admin_role(): string
 {
     session_start_secure();
-    $r = $_SESSION['admin_role'] ?? '';
+    $r = $_SESSION['admin_role'] ?? ($_SESSION['admin']['role'] ?? '');
     return is_string($r) ? $r : '';
 }
 
 function admin_login(): string
 {
     session_start_secure();
-    $l = $_SESSION['admin_login'] ?? '';
+    $l = $_SESSION['admin_login'] ?? ($_SESSION['admin']['login'] ?? '');
     return is_string($l) ? $l : '';
 }
 
+/**
+ * Return admin access level (tolerant).
+ * 1 = Superadmin
+ * 2 = Admin
+ * 3 = Teacher/Viewer
+ */
+function admin_level(): int
+{
+    session_start_secure();
+
+    // Preferred (new)
+    if (isset($_SESSION['admin']) && is_array($_SESSION['admin']) && isset($_SESSION['admin']['level'])) {
+        return (int)$_SESSION['admin']['level'];
+    }
+
+    // Legacy mirrors / tolerant
+    if (isset($_SESSION['admin_level'])) return (int)$_SESSION['admin_level'];
+    if (isset($_SESSION['level'])) return (int)$_SESSION['level'];
+
+    return 0;
+}
+
 // ------------------------------------------------------------
-// RBAC
+// Safe "next" URL helper (avoid open redirects)
 // ------------------------------------------------------------
 
-/** Require login for admin area */
+function safe_next_url(string $candidate, string $fallback = '/admin/dashboard.php'): string
+{
+    $candidate = trim($candidate);
+    if ($candidate === '') return $fallback;
+
+    if ($candidate[0] !== '/' || (isset($candidate[1]) && $candidate[0] === '/' && $candidate[1] === '/')) {
+        return $fallback;
+    }
+
+    if (preg_match('/[\x00-\x1F\x7F]/', $candidate)) {
+        return $fallback;
+    }
+
+    return $candidate;
+}
+
+/**
+ * Teacher-safe next helper (defaults to teacher dashboard)
+ */
+function safe_next_path_teacher(string $candidate, string $fallback = '/teacher/dashboard.php'): string
+{
+    $candidate = trim($candidate);
+    if ($candidate === '') return $fallback;
+
+    $parts = parse_url($candidate);
+    $path  = $parts['path']  ?? '';
+    $query = isset($parts['query']) ? ('?' . $parts['query']) : '';
+
+    if ($path === '' || $path[0] !== '/') return $fallback;
+
+    if (preg_match('#^/teacher/login\.php(?:$|[/?#])#', $path)) {
+        return $fallback;
+    }
+
+    if (preg_match('/[\x00-\x1F\x7F]/', $path . $query)) {
+        return $fallback;
+    }
+
+    return $path . $query;
+}
+
+// ------------------------------------------------------------
+// Redirect helpers (area-aware)
+// ------------------------------------------------------------
+
+function require_admin_login(): void
+{
+    $to = (string)($_SERVER['REQUEST_URI'] ?? '/admin/dashboard.php');
+    $to = safe_next_url($to, '/admin/dashboard.php');
+    header('Location: /admin/login.php?next=' . rawurlencode($to));
+    exit;
+}
+
+function require_teacher_login(): void
+{
+    $to = (string)($_SERVER['REQUEST_URI'] ?? '/teacher/dashboard.php');
+    $to = safe_next_path_teacher($to, '/teacher/dashboard.php');
+    header('Location: /teacher/login.php?next=' . rawurlencode($to));
+    exit;
+}
+
+// ------------------------------------------------------------
+// RBAC (Role-based kept; Level-based added)
+// ------------------------------------------------------------
+
+/**
+ * Require login for admin area.
+ * Backwards compatible: redirects to /admin/login.php.
+ */
 function require_admin(): void
 {
     session_start_secure();
 
-    if (empty($_SESSION['admin_id'])) {
-        $to = (string)($_SERVER['REQUEST_URI'] ?? '/admin/dashboard.php');
-        // Only allow local paths in "next"
-        $to = safe_next_url($to, '/admin/dashboard.php');
+    if (admin_id() <= 0) {
+        require_admin_login();
+    }
+}
 
-        header('Location: /admin/login.php?next=' . rawurlencode($to));
+/**
+ * Require login and specific admin levels.
+ * Example: require_admin_levels([1,2]) for admin pages.
+ */
+function require_admin_levels(array $levels): void
+{
+    require_admin();
+
+    $cur = admin_level();
+    foreach ($levels as $lvl) {
+        if ((int)$lvl === $cur) {
+            return;
+        }
+    }
+
+    http_response_code(403);
+    echo 'Forbidden.';
+    exit;
+}
+
+/**
+ * Editing permission (only level 1).
+ * Use in pages: $can_edit = can_edit();
+ */
+function can_edit(): bool
+{
+    return admin_level() === AUTH_LEVEL_SUPERADMIN;
+}
+
+/**
+ * Teacher area guard (Level 3 only). Redirects to /teacher/login.php.
+ * Use on teacher pages (except teacher/login.php).
+ */
+function require_teacher(): void
+{
+    session_start_secure();
+
+    if (admin_id() <= 0) {
+        require_teacher_login();
+    }
+
+    if (admin_level() !== AUTH_LEVEL_TEACHER) {
+        http_response_code(403);
+        echo 'Forbidden.';
         exit;
     }
 }
 
 /**
- * Require role (simple RBAC)
- * Order of privilege:
- *   superadmin > admin > viewer
+ * Require role (legacy, string RBAC).
+ * Order of privilege: superadmin > admin > viewer
  */
 function require_role(string $minRole): void
 {
@@ -297,94 +405,49 @@ function require_role(string $minRole): void
 }
 
 // ------------------------------------------------------------
-// Safe output helpers (NULL-safe)
-// ------------------------------------------------------------
-
-/**
- * Safe HTML escape (NULL-safe).
- * Use for normal text nodes: <?= h($value) ?>
- */
-function h(mixed $s): string
-{
-    if ($s === null) {
-        return '';
-    }
-    if (is_bool($s)) {
-        return $s ? '1' : '0';
-    }
-    return htmlspecialchars((string)$s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-}
-
-/**
- * Safe attribute escape helper (same as h(), explicit naming).
- * Use for attributes: <div data-x="<?= h_attr($value) ?>">
- */
-function h_attr(mixed $s): string
-{
-    return h($s);
-}
-
-// ------------------------------------------------------------
-// Optional: safe "next" URL helper (avoid open redirects)
-// ------------------------------------------------------------
-
-/**
- * Ensures a redirect target is a local path beginning with "/".
- * Rejects absolute URLs and protocol-relative URLs ("//evil.com").
- */
-function safe_next_url(string $candidate, string $fallback = '/admin/dashboard.php'): string
-{
-    $candidate = trim($candidate);
-    if ($candidate === '') {
-        return $fallback;
-    }
-
-    // Must start with a single "/" and not with "//"
-    if ($candidate[0] !== '/' || (isset($candidate[1]) && $candidate[0] === '/' && $candidate[1] === '/')) {
-        return $fallback;
-    }
-
-    // Optionally: prevent control chars
-    if (preg_match('/[\x00-\x1F\x7F]/', $candidate)) {
-        return $fallback;
-    }
-
-    return $candidate;
-}
-
-// ------------------------------------------------------------
 // Login/Logout helpers
 // ------------------------------------------------------------
 
 /**
  * Call immediately after successful authentication.
- * Example:
- *   admin_login_session((int)$row['id'], (string)$row['role'], (string)$row['login']);
+ * Backwards compatible signature.
+ *
+ * New optional parameter: $level (admins.level).
  */
-function admin_login_session(int $id, string $role, string $login): void
+function admin_login_session(int $id, string $role, string $login, ?int $level = null): void
 {
     session_start_secure();
 
-    $_SESSION['admin_id'] = $id;
-    $_SESSION['admin_role'] = $role;
+    $_SESSION['admin_id']    = $id;
+    $_SESSION['admin_role']  = $role;
     $_SESSION['admin_login'] = $login;
 
-    // Ensure CSRF exists early
-    csrf_token();
+    // Mirror into tolerant structure
+    if (!isset($_SESSION['admin']) || !is_array($_SESSION['admin'])) {
+        $_SESSION['admin'] = [];
+    }
+    $_SESSION['admin']['id']    = $id;
+    $_SESSION['admin']['role']  = $role;
+    $_SESSION['admin']['login'] = $login;
 
-    // Prevent session fixation
+    // Persist level consistently (new + legacy mirrors)
+    if ($level !== null) {
+        $lvl = (int)$level;
+        $_SESSION['admin']['level'] = $lvl;
+        $_SESSION['admin_level']    = $lvl; // legacy mirror
+        $_SESSION['level']          = $lvl; // legacy mirror
+    }
+
+    csrf_token();
     session_regenerate_id(true);
 
-    // Reset timers
     $_SESSION['_last_seen'] = time();
     $_SESSION['_last_rot']  = time();
 }
 
-/** Logout helper */
 function admin_logout_session(): void
 {
     if (session_status() !== PHP_SESSION_ACTIVE) {
-        // Start session to properly clear cookie (safe even if not logged in)
         session_start_secure();
     }
 
@@ -392,7 +455,6 @@ function admin_logout_session(): void
 
     if (ini_get('session.use_cookies')) {
         $p = session_get_cookie_params();
-        // Expire cookie with same parameters to ensure browser removes it
         setcookie(session_name(), '', [
             'expires'  => time() - 42000,
             'path'     => $p['path'] ?? '/',

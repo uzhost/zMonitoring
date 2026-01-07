@@ -1663,92 +1663,56 @@ foreach ([
             <table class="table table-sm table-striped align-middle mb-0">
               
               <thead class="table-light">
-  <tr>
-    <th>Pupil</th>
-    <th>Class</th>
-    <th class="text-end">N</th>
-    <th class="text-end">Mean</th>
-    <th class="text-end">Pass%</th>
-    <th class="text-end">Min</th>
-    <th>Reason</th>
-  </tr>
-</thead>
-<tbody>
-  <?php foreach ($atRisk as $r): ?>
-    <?php
-      $mean = (float)$r['mean_score'];
-      $minv = (float)$r['min_score'];
-      $bMean = badge_score_bucket($mean, $passThreshold, $goodThreshold, $excellentThreshold);
-      $bMin  = badge_score_bucket($minv, $passThreshold, $goodThreshold, $excellentThreshold);
-      $pr = (float)$r['pass_rate'];
-    ?>
-    <tr class="pupil-row row-click" role="button"
-        data-pupil-id="<?= (int)$r['id'] ?>"
-        data-pupil-label="<?= eh($r['surname'] . ' ' . $r['name']) ?>">
-      <td>
-        <div class="fw-semibold">
-          <i class="bi bi-person-exclamation me-1 text-danger"></i>
-          <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
-        </div>
-        <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
-      </td>
-      <td><?= eh($r['class_code']) ?></td>
-      <td class="text-end"><?= (int)$r['n'] ?></td>
-      <td class="text-end">
-        <span class="badge <?= eh($bMean) ?> metric-badge"><?= number_format($mean, 2) ?></span>
-      </td>
-      <td class="text-end">
-        <span class="badge <?= eh(($pr >= 75) ? 'text-bg-success' : (($pr >= 50) ? 'text-bg-primary' : (($pr >= 25) ? 'text-bg-warning text-dark' : 'text-bg-danger'))) ?> metric-badge">
-          <?= pct($pr, 1) ?>
-        </span>
-      </td>
-      <td class="text-end">
-        <span class="badge <?= eh($bMin) ?> metric-badge"><?= number_format($minv, 2) ?></span>
-      </td>
-      <td>
-        <span class="badge text-bg-light border"><?= eh($r['risk_reason'] ?? '—') ?></span>
-      </td>
-    </tr>
-  <?php endforeach; ?>
-</tbody>
-
-              <tbody>
-                <?php foreach ($atRisk as $r): ?>
-                  <?php
-                    $mean = (float)$r['mean_score'];
-                    $minv = (float)$r['min_score'];
-                    $bMean = badge_score_bucket($mean, $passThreshold, $goodThreshold, $excellentThreshold);
-                    $bMin  = badge_score_bucket($minv, $passThreshold, $goodThreshold, $excellentThreshold);
-                  ?>
-                  <tr class="pupil-row row-click" role="button"
-                      data-pupil-id="<?= (int)$r['id'] ?>"
-                      data-pupil-label="<?= eh($r['surname'] . ' ' . $r['name']) ?>">
-                    <td>
-                      <div class="fw-semibold">
-                        <i class="bi bi-person-exclamation me-1 text-danger"></i>
-                        <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
-                      </div>
-                      <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
-                    </td>
-                    <td><?= eh($r['class_code']) ?></td>
-                    <td class="text-end"><?= (int)$r['n'] ?></td>
-                    <td class="text-end">
-                      <span class="badge <?= eh($bMean) ?> metric-badge"><?= number_format($mean, 2) ?></span>
-                    </td>
-                    <td class="text-end">
-                      <?php $pr = (float)$r['pass_rate']; ?>
-                      <span class="badge <?= eh(($pr >= 75) ? 'text-bg-success' : (($pr >= 50) ? 'text-bg-primary' : (($pr >= 25) ? 'text-bg-warning text-dark' : 'text-bg-danger'))) ?> metric-badge">
-                        <?= pct($pr, 1) ?>
-                      </span>
-                    </td>
-                    <td class="text-end">
-                      <span class="badge <?= eh($bMin) ?> metric-badge"><?= number_format($minv, 2) ?></span>
-                    </td>
-                    <td><span class="badge text-bg-light border"><?= eh($r['risk_reason'] ?? '—') ?></span></td>
+                  <tr>
+                    <th>Pupil</th>
+                    <th>Class</th>
+                    <th class="text-end">N</th>
+                    <th class="text-end">Mean</th>
+                    <th class="text-end">Pass%</th>
+                    <th class="text-end">Min</th>
+                    <th>Reason</th>
                   </tr>
-                <?php endforeach; ?>
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  <?php foreach ($atRisk as $r): ?>
+                    <?php
+                      $mean = (float)$r['mean_score'];
+                      $minv = (float)$r['min_score'];
+                      $bMean = badge_score_bucket($mean, $passThreshold, $goodThreshold, $excellentThreshold);
+                      $bMin  = badge_score_bucket($minv, $passThreshold, $goodThreshold, $excellentThreshold);
+                      $pr = (float)$r['pass_rate'];
+                    ?>
+                    <tr class="pupil-row row-click" role="button"
+                        data-pupil-id="<?= (int)$r['id'] ?>"
+                        data-pupil-label="<?= eh($r['surname'] . ' ' . $r['name']) ?>">
+                      <td>
+                        <div class="fw-semibold">
+                          <i class="bi bi-person-exclamation me-1 text-danger"></i>
+                          <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
+                        </div>
+                        <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
+                      </td>
+                      <td><?= eh($r['class_code']) ?></td>
+                      <td class="text-end"><?= (int)$r['n'] ?></td>
+                      <td class="text-end">
+                        <span class="badge <?= eh($bMean) ?> metric-badge"><?= number_format($mean, 2) ?></span>
+                      </td>
+                      <td class="text-end">
+                        <span class="badge <?= eh(($pr >= 75) ? 'text-bg-success' : (($pr >= 50) ? 'text-bg-primary' : (($pr >= 25) ? 'text-bg-warning text-dark' : 'text-bg-danger'))) ?> metric-badge">
+                          <?= pct($pr, 1) ?>
+                        </span>
+                      </td>
+                      <td class="text-end">
+                        <span class="badge <?= eh($bMin) ?> metric-badge"><?= number_format($minv, 2) ?></span>
+                      </td>
+                      <td>
+                        <span class="badge text-bg-light border"><?= eh($r['risk_reason'] ?? '—') ?></span>
+                      </td>
+                    </tr>
+                  <?php endforeach; ?>
+                </tbody>
+
+             </table>
           </div>
           <div class="small text-muted mt-2">Click a pupil row to view the insight view (exam deltas + all subjects).</div>
         <?php endif; ?>

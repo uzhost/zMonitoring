@@ -323,6 +323,40 @@ require __DIR__ . '/p-header.php';
     padding: 0 .7rem !important;
   }
 
+  .summary-pills{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:.38rem;
+  }
+  .summary-pill{
+    display:inline-flex;
+    align-items:center;
+    gap:.38rem;
+    height: 1.88rem;
+    padding: .26rem .58rem;
+    border-radius: .62rem;
+    border: 1px solid rgba(15,23,42,.16);
+    background: #f8fafc;
+    color: #0f172a;
+    line-height: 1;
+    font-size: .9rem;
+    white-space: nowrap;
+  }
+  .summary-pill .sum-label{ font-weight: 800; }
+  .summary-pill .sum-value{
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .summary-pill .sum-icon{
+    width: .9rem;
+    text-align:center;
+    font-weight: 900;
+  }
+  .summary-pill.diff-up .sum-icon{ color: #15803d; }
+  .summary-pill.diff-down .sum-icon{ color: #dc2626; }
+  .summary-pill.diff-flat .sum-icon{ color: #64748b; }
+
   /* O‘rtacha satr sonlari ham pill kengligida markazda turishi uchun */
   .avg-num{
     display:inline-flex;
@@ -498,6 +532,13 @@ require __DIR__ . '/p-header.php';
       font-size: .8rem !important;
       border: 1px solid rgba(0, 0, 0, .2) !important;
     }
+    .summary-pill{
+      height: 1.56rem !important;
+      font-size: .74rem !important;
+      padding: .16rem .36rem !important;
+      border-color: rgba(0,0,0,.22) !important;
+      background: #fff !important;
+    }
     .badge {
       box-shadow: none !important;
       text-shadow: none !important;
@@ -627,6 +668,17 @@ require __DIR__ . '/p-header.php';
         $avgs = calc_avgs($rows);
 
         $avgDiffStr = ($avgs['avgd'] === null) ? '-' : (($avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$avgs['avgd']));
+        $avgDiffDir = 'flat';
+        $avgDiffIcon = '=';
+        if ($avgs['avgd'] !== null) {
+            if ((float)$avgs['avgd'] > 0.0) {
+                $avgDiffDir = 'up';
+                $avgDiffIcon = '^';
+            } elseif ((float)$avgs['avgd'] < 0.0) {
+                $avgDiffDir = 'down';
+                $avgDiffIcon = 'v';
+            }
+        }
       ?>
 
       <!-- PRINT: sarlavha (har bir fan bo‘limi oldidan) -->
@@ -654,13 +706,19 @@ require __DIR__ . '/p-header.php';
             <span class="text-muted small ms-1">(<?= (int)$avgs['n'] ?> nafar)</span>
           </div>
 
-          <div class="d-flex flex-wrap gap-2 align-items-center">
-            <span class="badge text-bg-light border text-dark mono"><?= h($exam1Name) ?>: <span class="fw-semibold"><?= h(fmt_score($avgs['avg1'])) ?></span></span>
-            <span class="badge text-bg-light border text-dark mono"><?= h($exam2Name) ?>: <span class="fw-semibold"><?= h(fmt_score($avgs['avg2'])) ?></span></span>
-            <span class="badge text-bg-light border text-dark mono">
-              Farq:
-              <?= diff_icon($avgs['avgd']) ?>
-              <span class="fw-semibold"><?= h($avgDiffStr) ?></span>
+          <div class="summary-pills">
+            <span class="summary-pill mono">
+              <span class="sum-label"><?= h($exam1Name) ?>:</span>
+              <span class="sum-value"><?= h(fmt_score($avgs['avg1'])) ?></span>
+            </span>
+            <span class="summary-pill mono">
+              <span class="sum-label"><?= h($exam2Name) ?>:</span>
+              <span class="sum-value"><?= h(fmt_score($avgs['avg2'])) ?></span>
+            </span>
+            <span class="summary-pill mono diff-<?= h($avgDiffDir) ?>">
+              <span class="sum-label">Farq:</span>
+              <span class="sum-icon"><?= h($avgDiffIcon) ?></span>
+              <span class="sum-value"><?= h($avgDiffStr) ?></span>
             </span>
           </div>
         </div>
@@ -755,4 +813,3 @@ require __DIR__ . '/p-header.php';
 </div>
 
 <?php require __DIR__ . '/p-footer.php'; ?>
-

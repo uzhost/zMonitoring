@@ -1,5 +1,5 @@
 <?php
-// teacher/p-footer.php — Print-first report footer
+// teacher/p-footer.php  Print-first report footer
 declare(strict_types=1);
 
 // Note: this file assumes it is included after p-header.php in the same request,
@@ -23,6 +23,36 @@ declare(strict_types=1);
 
   <script nonce="<?= h($cspNonce ?? '') ?>">
   (function () {
+    var modeColorBtn = document.getElementById('printModeColor');
+    var modeGrayBtn = document.getElementById('printModeGray');
+    var modeKey = 'ztim_print_mode:' + location.pathname;
+
+    function setPrintMode(mode, persist) {
+      var isGray = mode === 'greyscale';
+      document.body.classList.toggle('print-greyscale', isGray);
+      document.body.classList.toggle('print-colour', !isGray);
+      if (modeColorBtn) modeColorBtn.classList.toggle('active', !isGray);
+      if (modeGrayBtn) modeGrayBtn.classList.toggle('active', isGray);
+      if (persist) {
+        try { localStorage.setItem(modeKey, isGray ? 'greyscale' : 'colour'); } catch (e) {}
+      }
+    }
+
+    var initialMode = 'colour';
+    try {
+      var urlMode = (new URL(window.location.href)).searchParams.get('print_mode');
+      if (urlMode === 'greyscale' || urlMode === 'gray') {
+        initialMode = 'greyscale';
+      } else {
+        var savedMode = localStorage.getItem(modeKey);
+        if (savedMode === 'greyscale' || savedMode === 'colour') initialMode = savedMode;
+      }
+    } catch (e) {}
+
+    setPrintMode(initialMode, false);
+    if (modeColorBtn) modeColorBtn.addEventListener('click', function () { setPrintMode('colour', true); });
+    if (modeGrayBtn) modeGrayBtn.addEventListener('click', function () { setPrintMode('greyscale', true); });
+
     var input = document.getElementById('reportStampInput');
     var text  = document.getElementById('reportStampText');
     var footerStamp = document.getElementById('printFooterStamp');
@@ -69,6 +99,8 @@ declare(strict_types=1);
 
     // Keep printed value consistent
     window.addEventListener('beforeprint', function () {
+      var isGray = document.body.classList.contains('print-greyscale');
+      setPrintMode(isGray ? 'greyscale' : 'colour', false);
       setStamp(input.value, false);
     });
 

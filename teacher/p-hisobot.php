@@ -259,7 +259,9 @@ require __DIR__ . '/p-header.php';
   th.diff-col, td.diff-cell { text-align: center !important; }
 
   /* Score ustunlari ham markazda (o‘rtacha satrda “siljish” bartaraf etiladi) */
-  td.score-cell { text-align: center !important; }
+  th.score-col, td.score-cell { 
+  text-align: center !important;
+    }
 
   .pupil-name{
     display:block;
@@ -285,7 +287,7 @@ require __DIR__ . '/p-header.php';
     align-items:center;
     justify-content:center;
     min-width: 3.5rem;
-    height: 1.90rem;
+    height: 1.85rem;
     font-size: 0.95rem;
     line-height: 1;
     font-weight: 800;
@@ -358,7 +360,9 @@ require __DIR__ . '/p-header.php';
     tr { break-inside: avoid; page-break-inside: avoid; }
 
     /* Sticky / scroll bekor */
-    .sticky-head thead th { position: static !important; }
+    .sticky-head thead th.score-col{
+      text-align: center !important;
+    }
     .table-responsive { overflow: visible !important; border: none !important; }
 
     /* Hisobotga xos ko‘rinish */
@@ -558,8 +562,8 @@ require __DIR__ . '/p-header.php';
               <thead>
                 <tr>
                   <th class="name-col">O‘quvchi (familiya, ism)</th>
-                  <th class="score-col"><?= h($exam1Name) ?></th>
-                  <th class="score-col"><?= h($exam2Name) ?></th>
+                 <th class="score-col text-center"><?= h($exam1Name) ?></th>
+                 <th class="score-col text-center"><?= h($exam2Name) ?></th>
                   <th class="diff-col text-center">Farq</th>
                 </tr>
               </thead>

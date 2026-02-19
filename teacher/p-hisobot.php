@@ -12,8 +12,8 @@ require_role('viewer');
  * Baholash ranglari (max ballga nisbatan foiz):
  *  <46%  => qizil (past)
  *  <66%  => sariq (qoniqarli)
- *  <86%  => ko‘k (yaxshi)
- * >=86%  => yashil (a’lo)
+ *  <86%  => ko'k (yaxshi)
+ * >=86%  => yashil (a'lo)
  */
 function score_badge_class(?float $score, int $maxPoints = 40): string
 {
@@ -37,10 +37,10 @@ function diff_badge_class(?float $diff): string
 
 function diff_icon(?float $diff): string
 {
-    if ($diff === null) return '<span class="diff-icon text-muted" title="Ma’lumot yo‘q">-</span>';
-    if ($diff > 0) return '<span class="diff-icon text-success" title="O‘sish">^</span>';
-    if ($diff < 0) return '<span class="diff-icon text-danger" title="Pasayish">v</span>';
-    return '<span class="diff-icon text-muted" title="O‘zgarishsiz">=</span>';
+    if ($diff === null) return '<span class="diff-icon text-muted" title="Ma&apos;lumot yo&apos;q">-</span>';
+    if ($diff > 0) return '<span class="diff-icon text-success" title="O&apos;sish">&#9650;</span>';
+    if ($diff < 0) return '<span class="diff-icon text-danger" title="Pasayish">&#9660;</span>';
+    return '<span class="diff-icon text-muted" title="O&apos;zgarishsiz">=</span>';
 }
 
 function fmt_score(?float $v): string
@@ -91,7 +91,7 @@ function calc_avgs(array $rows): array
 }
 
 /* -----------------------------
-   Filtr ma’lumotlari
+   Filtr ma'lumotlari
 ----------------------------- */
 
 $classes  = $pdo->query("SELECT DISTINCT class_code FROM pupils ORDER BY class_code")->fetchAll(PDO::FETCH_ASSOC);
@@ -121,7 +121,7 @@ if ($subjectPick !== 'all') {
     $subjectId = $tmp > 0 ? $tmp : null;
 }
 
-// Bir xil imtihon tanlansa - 1-imtihonni bo‘shatamiz (UX)
+// Bir xil imtihon tanlansa - 1-imtihonni bo'shatamiz (UX)
 if ($exam1Id > 0 && $exam2Id > 0 && $exam1Id === $exam2Id) {
     $exam1Id = 0;
 }
@@ -173,7 +173,7 @@ function fetch_class_rows(PDOStatement $stmtClass, string $classCode, int $subje
 }
 
 /* -----------------------------
-   Barcha fanlar tanlanganda faqat mavjud natijalar asosida fanlarni ko‘rsatish
+   Barcha fanlar tanlanganda faqat mavjud natijalar asosida fanlarni ko'rsatish
 ----------------------------- */
 
 $subjectsById = [];
@@ -233,7 +233,7 @@ if ($subjectId !== null && isset($subjectsById[$subjectId])) {
 
 $page_title = 'Sinf Hisoboti';
 $report_title = 'Sinf kesimida taqqoslama tahlil';
-$report_subtitle = "Imtihonlar bo‘yicha qiyosiy natijalar";
+$report_subtitle = "Imtihonlar bo'yicha qiyosiy natijalar";
 $report_meta = [
     'Sinf' => $classCode !== '' ? $classCode : '-',
     'Fan' => $selectedSubjectLabel,
@@ -357,7 +357,7 @@ require __DIR__ . '/p-header.php';
   .summary-pill.diff-down .sum-icon{ color: #dc2626; }
   .summary-pill.diff-flat .sum-icon{ color: #64748b; }
 
-  /* O‘rtacha satr sonlari ham pill kengligida markazda turishi uchun */
+  /* O'rtacha satr sonlari ham pill kengligida markazda turishi uchun */
   .avg-num{
     display:inline-flex;
     align-items:center;
@@ -402,7 +402,7 @@ require __DIR__ . '/p-header.php';
     background: rgba(13,110,253,.04);
   }
 
-  /* Print-friendly (hisobot ko‘rinishi) */
+  /* Print-friendly (hisobot ko'rinishi) */
   @media print {
     @page { margin: 10mm; }
 
@@ -427,7 +427,7 @@ require __DIR__ . '/p-header.php';
     }
     .table-responsive { overflow: visible !important; border: none !important; }
 
-    /* Hisobotga xos ko‘rinish */
+    /* Hisobotga xos ko'rinish */
     .card, .subject-card {
       box-shadow: none !important;
       border: 1px solid rgba(0,0,0,.35) !important;
@@ -449,7 +449,7 @@ require __DIR__ . '/p-header.php';
     /* Ranglar xiralashmasin */
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 
-    /* Sahifa bo‘linishi */
+    /* Sahifa bo'linishi */
     .subject-card { break-inside: avoid; page-break-inside: avoid; }
     .page-break { break-after: page; page-break-after: always; }
   }
@@ -527,17 +527,69 @@ require __DIR__ . '/p-header.php';
     .score-pill,
     .diff-pill,
     .avg-num {
-      min-width: 3.9rem !important;
-      height: 1.35rem !important;
+      min-width: 3.2rem !important;
+      height: auto !important;
       font-size: .8rem !important;
-      border: 1px solid rgba(0, 0, 0, .2) !important;
+      border: none !important;
+      border-radius: 0 !important;
+      padding: 0 !important;
+      background: transparent !important;
+    }
+    .avg-num{
+      border: none !important;
+      background: transparent !important;
+      min-width: 3.2rem !important;
+      padding: 0 !important;
     }
     .summary-pill{
-      height: 1.56rem !important;
+      height: auto !important;
       font-size: .74rem !important;
-      padding: .16rem .36rem !important;
-      border-color: rgba(0,0,0,.22) !important;
-      background: #fff !important;
+      padding: 0 !important;
+      border: none !important;
+      background: transparent !important;
+      border-radius: 0 !important;
+    }
+    body:not(.print-greyscale) .score-pill.text-bg-danger,
+    body:not(.print-greyscale) .diff-pill.text-bg-danger { color: #dc2626 !important; }
+    body:not(.print-greyscale) .score-pill.text-bg-warning,
+    body:not(.print-greyscale) .diff-pill.text-bg-warning { color: #a16207 !important; }
+    body:not(.print-greyscale) .score-pill.text-bg-primary,
+    body:not(.print-greyscale) .diff-pill.text-bg-primary { color: #1d4ed8 !important; }
+    body:not(.print-greyscale) .score-pill.text-bg-success,
+    body:not(.print-greyscale) .diff-pill.text-bg-success { color: #15803d !important; }
+    body:not(.print-greyscale) .score-pill.text-bg-secondary,
+    body:not(.print-greyscale) .diff-pill.text-bg-secondary { color: #475569 !important; }
+    body:not(.print-greyscale) .score-pill.text-bg-secondary-subtle,
+    body:not(.print-greyscale) .diff-pill.text-bg-secondary-subtle { color: #475569 !important; }
+    body:not(.print-greyscale) .summary-pill .sum-icon { font-weight: 900 !important; }
+    body.print-greyscale .badge,
+    body.print-greyscale .score-pill,
+    body.print-greyscale .diff-pill,
+    body.print-greyscale .summary-pill {
+      color: #111827 !important;
+      background: transparent !important;
+      border: none !important;
+    }
+    body.print-greyscale .text-success,
+    body.print-greyscale .text-danger,
+    body.print-greyscale .text-primary,
+    body.print-greyscale .text-warning,
+    body.print-greyscale .sum-icon,
+    body.print-greyscale .diff-icon {
+      color: #111827 !important;
+    }
+    body.print-greyscale .diff-icon,
+    body.print-greyscale .sum-icon {
+      display: none !important;
+    }
+    body.print-greyscale .diff-wrap {
+      gap: 0 !important;
+    }
+    body.print-greyscale .summary-pill {
+      gap: .14rem !important;
+    }
+    body.print-greyscale .compare-table tbody tr:nth-child(even) td {
+      background: #f6f6f6 !important;
     }
     .badge {
       box-shadow: none !important;
@@ -633,7 +685,7 @@ require __DIR__ . '/p-header.php';
 
         <div class="col-12 d-flex flex-wrap gap-2 mt-2">
           <button class="btn btn-primary">
-            <i class="bi bi-funnel me-1"></i>Qo‘llash
+            <i class="bi bi-funnel me-1"></i>Qo'llash
           </button>
           <a class="btn btn-outline-secondary" href="/teacher/p-hisobot.php">
             <i class="bi bi-arrow-counterclockwise me-1"></i>Qayta tiklash
@@ -645,7 +697,7 @@ require __DIR__ . '/p-header.php';
             <span class="badge text-bg-warning text-dark">&lt;66%</span>
             <span class="badge text-bg-primary">&lt;86%</span>
             <span class="badge text-bg-success">&ge;86%</span>
-            <span class="ms-2">Farq: ^ / v / =</span>
+            <span class="ms-2">Farq: &#9650; / &#9660; / =</span>
           </div>
         </div>
 
@@ -654,7 +706,7 @@ require __DIR__ . '/p-header.php';
   </div>
 
   <?php if ($classCode === '' || !$subjectsToShow): ?>
-    <div class="alert alert-warning">Ko‘rsatish uchun ma’lumot topilmadi.</div>
+    <div class="alert alert-warning">Ko'rsatish uchun ma'lumot topilmadi.</div>
   <?php else: ?>
 
     <?php foreach ($subjectsToShow as $idx => $sub): ?>
@@ -673,15 +725,15 @@ require __DIR__ . '/p-header.php';
         if ($avgs['avgd'] !== null) {
             if ((float)$avgs['avgd'] > 0.0) {
                 $avgDiffDir = 'up';
-                $avgDiffIcon = '^';
+                $avgDiffIcon = '&#9650;';
             } elseif ((float)$avgs['avgd'] < 0.0) {
                 $avgDiffDir = 'down';
-                $avgDiffIcon = 'v';
+                $avgDiffIcon = '&#9660;';
             }
         }
       ?>
 
-      <!-- PRINT: sarlavha (har bir fan bo‘limi oldidan) -->
+      <!-- PRINT: sarlavha (har bir fan bo'limi oldidan) -->
       <div class="print-only mb-2">
         <div class="print-title">Sinf: <?= h($classCode) ?> - fanlar kesimida tahlil</div>
         <div class="print-meta">
@@ -689,8 +741,8 @@ require __DIR__ . '/p-header.php';
           Fan: <?= h($sname) ?>.
         </div>
         <div class="print-kpi mt-1">
-          O‘quvchilar soni: <span class="fw-semibold"><?= (int)$avgs['n'] ?></span>.
-          O‘rtacha ball: <?= h($exam1Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg1'])) ?></span>,
+          O'quvchilar soni: <span class="fw-semibold"><?= (int)$avgs['n'] ?></span>.
+          O'rtacha ball: <?= h($exam1Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg1'])) ?></span>,
           <?= h($exam2Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg2'])) ?></span>,
           Farq - <span class="fw-semibold"><?= h($avgDiffStr) ?></span>.
         </div>
@@ -703,7 +755,7 @@ require __DIR__ . '/p-header.php';
           <div class="d-flex align-items-center gap-2 flex-wrap">
             <span class="badge text-bg-dark"><i class="bi bi-book me-1"></i><?= h($sname) ?></span>
             <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">Maks. <?= h((string)$maxPoints) ?></span>
-            <span class="text-muted small ms-1">(<?= (int)$avgs['n'] ?> nafar)</span>
+            <span class="text-muted small ms-1"><?= (int)$avgs['n'] ?> nafar</span>
           </div>
 
           <div class="summary-pills">
@@ -717,7 +769,7 @@ require __DIR__ . '/p-header.php';
             </span>
             <span class="summary-pill mono diff-<?= h($avgDiffDir) ?>">
               <span class="sum-label">Farq:</span>
-              <span class="sum-icon"><?= h($avgDiffIcon) ?></span>
+              <span class="sum-icon"><?= $avgDiffIcon /* safe: internal constants only */ ?></span>
               <span class="sum-value"><?= h($avgDiffStr) ?></span>
             </span>
           </div>
@@ -728,7 +780,7 @@ require __DIR__ . '/p-header.php';
             <table class="table table-sm table-hover align-middle mb-0 sticky-head compare-table">
               <thead>
                 <tr>
-                  <th class="name-col">O‘quvchi (familiya, ism)</th>
+                  <th class="name-col">O'quvchi (familiya, ism)</th>
                  <th class="score-col text-center"><?= h($exam1Name) ?></th>
                  <th class="score-col text-center"><?= h($exam2Name) ?></th>
                   <th class="diff-col text-center">Farq</th>
@@ -736,7 +788,7 @@ require __DIR__ . '/p-header.php';
               </thead>
               <tbody>
                 <?php if (!$rows): ?>
-                  <tr><td colspan="4" class="text-muted">Ushbu fan bo‘yicha o‘quvchilar ro‘yxati topilmadi.</td></tr>
+                  <tr><td colspan="4" class="text-muted">Ushbu fan bo'yicha o'quvchilar ro'yxati topilmadi.</td></tr>
                 <?php else: ?>
                   <?php foreach ($rows as $rowIdx => $r): ?>
                     <?php
@@ -776,10 +828,10 @@ require __DIR__ . '/p-header.php';
                     </tr>
                   <?php endforeach; ?>
 
-                  <!-- O‘rtacha satr: avg1/avg2 ham optik markazda -->
+                  <!-- O'rtacha satr: avg1/avg2 ham optik markazda -->
                   <tr class="table-light text-center">
                     
-                    <td class="fw-semibold text-center">O‘rtacha ko‘rsatkich</td>
+                    <td class="fw-semibold text-center">O'rtacha ko'rsatkich</td>
                     <td class="mono fw-semibold score-cell text-center">
                       <span class="avg-num mono"><?= h(fmt_score($avgs['avg1'])) ?></span>
                     </td>

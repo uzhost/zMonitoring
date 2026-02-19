@@ -1,10 +1,39 @@
 <?php
-// teacher/p-header.php — Print-first report header (Bootstrap 5.3.8 CDN), no portal chrome
+// teacher/p-header.php  Print-first report header (Bootstrap 5.3.8 CDN), no portal chrome
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/auth.php';
 
 session_start_secure();
+
+function uz_fix(string $text): string
+{
+    $text = str_replace(
+        ["\u{2018}", "\u{2019}", "\u{02BB}", "\u{02BC}", "\u{0060}", "\u{00B4}", "\u{02B9}"],
+        "'",
+        $text
+    );
+
+    $rules = [
+        'kok' => "ko'k",
+        'alo' => "a'lo",
+        'malumot' => "ma'lumot",
+        'qollash' => "qo'llash",
+        'korsatkich' => "ko'rsatkich",
+        'korsatish' => "ko'rsatish",
+        'ortacha' => "o'rtacha",
+        'osish' => "o'sish",
+        'ozgarish' => "o'zgarish",
+        'boyicha' => "bo'yicha",
+        'royxat' => "ro'yxat",
+    ];
+
+    foreach ($rules as $from => $to) {
+        $text = preg_replace('/\b' . preg_quote($from, '/') . '\b/i', $to, $text) ?? $text;
+    }
+
+    return $text;
+}
 
 // Optional: report pages should still be protected unless explicitly disabled
 $auth_required = $auth_required ?? true;
@@ -26,6 +55,21 @@ $pageTitle      = (isset($page_title) && is_string($page_title) && $page_title !
 $reportTitle    = (isset($report_title) && is_string($report_title)) ? trim($report_title) : '';
 $reportSubtitle = (isset($report_subtitle) && is_string($report_subtitle)) ? trim($report_subtitle) : '';
 $reportMeta     = (isset($report_meta) && is_array($report_meta)) ? $report_meta : [];
+
+$pageTitle = uz_fix($pageTitle);
+$reportTitle = uz_fix($reportTitle);
+$reportSubtitle = uz_fix($reportSubtitle);
+
+$reportMetaFixed = [];
+foreach ($reportMeta as $k => $v) {
+    $key = uz_fix((string)$k);
+    if ($key === '') {
+        continue;
+    }
+    $val = is_scalar($v) ? uz_fix((string)$v) : '';
+    $reportMetaFixed[$key] = $val;
+}
+$reportMeta = $reportMetaFixed;
 
 // Print stamp (can be overridden)
 // Priority: explicit $print_stamp (server) -> ?stamp=... (URL) -> now
@@ -98,6 +142,14 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
     }
     .report-meta .k{ color: rgba(0,0,0,.78); font-weight: 700; }
     .report-actions{ display:flex; gap:8px; flex-wrap:wrap; }
+    .print-mode-group .btn{
+      min-width: 92px;
+    }
+    .print-mode-group .btn.active{
+      background: #0f172a;
+      color: #fff;
+      border-color: #0f172a;
+    }
 
     .stamp-editor{ display:flex; gap:8px; align-items:center; justify-content:flex-end; }
     .stamp-editor .form-control{ max-width: 210px; }
@@ -162,13 +214,14 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
       .print-footer .page::after{ content: counter(page); }
       .stamp-editor{ display:none !important; }
       *{ -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+
     }
   </style>
 </head>
 
 <body>
   <a class="visually-hidden-focusable position-absolute top-0 start-0 p-2 bg-white border rounded-2 m-2" href="#mainContent">
-    Mazmunga o‘tish
+    Mazmunga o'tish
   </a>
 
   <main id="mainContent" class="container-fluid py-3">
@@ -190,6 +243,10 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
           </div>
 
           <div class="report-actions no-print">
+            <div class="btn-group btn-group-sm print-mode-group" role="group" aria-label="Print mode">
+              <button type="button" class="btn btn-outline-dark" id="printModeColor">Colour</button>
+              <button type="button" class="btn btn-outline-dark" id="printModeGray">Greyscale</button>
+            </div>
             <button type="button" class="btn btn-outline-dark btn-sm" onclick="window.print()">
               <i class="bi bi-printer me-1"></i>Chop etish
             </button>

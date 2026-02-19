@@ -34,7 +34,7 @@ $isImportActive = in_array($current, $importPages, true);
 $classPages = ['class_report.php', 'class_pupils.php', 'class_group.php'];
 $isClassActive = in_array($current, $classPages, true);
 
-$pupilPages = ['pupils.php', 'pupils_result.php'];
+$pupilPages = ['pupils.php', 'pupils_result.php', 'certificates.php'];
 $isPupilsActive = in_array($current, $pupilPages, true);
 
 // -------------------- Flash messages (optional) --------------------
@@ -265,6 +265,11 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
             <li>
               <a class="dropdown-item<?= $active('pupils_result.php') ?>" href="pupils_result.php">
                 <i class="bi bi-graph-up-arrow me-2"></i> Pupils results
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('certificates.php') ?>" href="certificates.php">
+                <i class="bi bi-patch-check me-2"></i> Certificates
               </a>
             </li>
           </ul>

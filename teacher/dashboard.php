@@ -9,10 +9,18 @@ require_once __DIR__ . '/../inc/auth.php';
 
 session_start_secure();
 
+$scriptName = (string)($_SERVER['SCRIPT_NAME'] ?? '/teacher/dashboard.php');
+$teacherBase = rtrim(str_replace('\\', '/', dirname($scriptName)), '/.');
+$teacherBase = ($teacherBase === '') ? '/teacher' : $teacherBase;
+$dashboardUrl = $teacherBase . '/dashboard.php';
+$reportsBaseUrl = $teacherBase . '/reports.php';
+$loginUrl = $teacherBase . '/login.php';
+$pupilBaseUrl = $teacherBase . '/pupil.php';
+
 // -------------------- Access control --------------------
 if (admin_id() <= 0) {
-    $to = $_SERVER['REQUEST_URI'] ?? '/teacher/dashboard.php';
-    header('Location: /teacher/login.php?next=' . rawurlencode($to));
+    $to = $_SERVER['REQUEST_URI'] ?? $dashboardUrl;
+    header('Location: ' . $loginUrl . '?next=' . rawurlencode($to));
     exit;
 }
 
@@ -37,11 +45,16 @@ if (empty($_SESSION['csp_nonce']) || !is_string($_SESSION['csp_nonce'])) {
 $cspNonce = $_SESSION['csp_nonce'];
 
 // Security headers
+header('Content-Type: text/html; charset=UTF-8');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('X-Frame-Options: SAMEORIGIN');
+header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 
 $pageTitle = 'Dashboard';
+const PASS_SCORE = 18.4;
+const GOOD_SCORE = 26.4;
+const EXCELLENT_SCORE = 34.4;
 
 // -------------------- Helpers --------------------
 function qs_merge(array $overrides = []): string {
@@ -56,20 +69,37 @@ function qs_merge(array $overrides = []): string {
     return http_build_query($q);
 }
 
-function score_band(float $s): string {
-    global $PASS, $GOOD, $EXCELLENT;
+function get_query_string(string $key, int $maxLen = 40): string {
+    $value = trim((string)($_GET[$key] ?? ''));
+    return ($maxLen > 0) ? mb_substr($value, 0, $maxLen, 'UTF-8') : $value;
+}
 
-    if ($s < $PASS) return 'danger';       // Needs support
-    if ($s < $GOOD) return 'warning';      // Pass (≈3/5)
-    if ($s < $EXCELLENT) return 'primary'; // Good
-    return 'success';                      // Excellent
+function get_query_int(string $key): int {
+    return (int)($_GET[$key] ?? 0);
+}
+
+function exam_label(array $exam): string {
+    $ay = (string)($exam['academic_year'] ?? '');
+    $termValue = $exam['term'] ?? null;
+    $t = ($termValue === null || $termValue === '') ? '-' : (string)$termValue;
+    $nm = (string)($exam['exam_name'] ?? '');
+    $d = (string)($exam['exam_date'] ?? '');
+    return trim($ay . ' T' . $t . ' - ' . $nm . ($d !== '' ? ' (' . $d . ')' : ''));
+}
+
+function score_band(float $s): string {
+    if ($s < PASS_SCORE) return 'danger';       // Needs support
+    if ($s < GOOD_SCORE) return 'warning';      // Pass
+    if ($s < EXCELLENT_SCORE) return 'primary'; // Good
+    return 'success';                           // Excellent
 }
 
 function fmt_delta(?float $d, int $dec = 2): string {
-    if ($d === null) return '—';
+    if ($d === null) return '-';
     $sign = ($d > 0) ? '+' : '';
     return $sign . number_format($d, $dec);
 }
+
 
 function badge_delta(?float $d): string {
     if ($d === null) return 'secondary';
@@ -79,22 +109,19 @@ function badge_delta(?float $d): string {
 }
 
 // -------------------- Filters --------------------
-$year      = trim((string)($_GET['year'] ?? ''));
-$examIdIn  = (int)($_GET['exam_id'] ?? 0);
-$classCode = trim((string)($_GET['class_code'] ?? ''));
-$track     = trim((string)($_GET['track'] ?? ''));
-$subjectId = (int)($_GET['subject_id'] ?? 0);
+$year      = get_query_string('year', 16);
+$examIdIn  = max(0, get_query_int('exam_id'));
+$classCode = get_query_string('class_code', 20);
+$track     = get_query_string('track', 20);
+$subjectId = max(0, get_query_int('subject_id'));
 
 $validTracks = ['Aniq', 'Tabiiy'];
 if ($track !== '' && !in_array($track, $validTracks, true)) {
     $track = '';
 }
 
-// Performance thresholds (0–40 scale)
-// 46% = Pass (≈ mark 3/5), 66% = Good, 86% = Excellent
-$PASS      = 18.4;  // 46% of 40
-$GOOD      = 26.4;  // 66% of 40
-$EXCELLENT = 34.4;  // 86% of 40
+// Performance thresholds (0-40 scale)
+// 46% = Pass, 66% = Good, 86% = Excellent
 
 // -------------------- Load filter options --------------------
 $years = $pdo->query("SELECT DISTINCT academic_year FROM exams ORDER BY academic_year DESC")->fetchAll();
@@ -113,6 +140,11 @@ $exams = $examsStmt->fetchAll();
 
 $classes  = $pdo->query("SELECT DISTINCT class_code FROM pupils ORDER BY class_code")->fetchAll();
 $subjects = $pdo->query("SELECT id, name FROM subjects ORDER BY name")->fetchAll();
+$subjectNameById = [];
+foreach ($subjects as $s) {
+    $sid = (int)($s['id'] ?? 0);
+    if ($sid > 0) $subjectNameById[$sid] = (string)($s['name'] ?? '');
+}
 
 // -------------------- Determine effective exam + previous exam --------------------
 $effectiveExamId = $examIdIn;
@@ -138,11 +170,7 @@ $prevLabel = null;
 if ($effectiveExamId > 0) {
     foreach ($exams as $e) {
         if ((int)$e['id'] === $effectiveExamId) {
-            $ay = (string)$e['academic_year'];
-            $t  = ($e['term'] === null) ? '-' : (string)$e['term'];
-            $nm = (string)$e['exam_name'];
-            $d  = (string)($e['exam_date'] ?? '');
-            $examLabel = trim($ay . ' T' . $t . ' — ' . $nm . ($d !== '' ? ' (' . $d . ')' : ''));
+            $examLabel = exam_label($e);
             break;
         }
     }
@@ -151,16 +179,11 @@ if ($effectiveExamId > 0) {
 if ($prevExamId > 0) {
     foreach ($exams as $e) {
         if ((int)$e['id'] === $prevExamId) {
-            $ay = (string)$e['academic_year'];
-            $t  = ($e['term'] === null) ? '-' : (string)$e['term'];
-            $nm = (string)$e['exam_name'];
-            $d  = (string)($e['exam_date'] ?? '');
-            $prevLabel = trim($ay . ' T' . $t . ' — ' . $nm . ($d !== '' ? ' (' . $d . ')' : ''));
+            $prevLabel = exam_label($e);
             break;
         }
     }
 }
-
 // -------------------- Build WHERE fragments --------------------
 $whereBase = ["1=1"];
 $paramsBase = [];
@@ -267,7 +290,7 @@ if ((int)$kpiNow['n_results'] > 0) {
       JOIN exams  e ON e.id = r.exam_id
       WHERE $whereNowSql
     ");
-    $prStmt->execute($paramsNow + [':pass' => $PASS]);
+    $prStmt->execute($paramsNow + [':pass' => PASS_SCORE]);
     $passRateNow = (float)($prStmt->fetch()['pass_rate'] ?? 0.0);
 }
 
@@ -280,7 +303,7 @@ if ($prevExamId > 0 && (int)$kpiPrev['n_results'] > 0) {
       JOIN exams  e ON e.id = r.exam_id
       WHERE $wherePrevSql
     ");
-    $prStmt->execute($paramsPrev + [':pass' => $PASS]);
+    $prStmt->execute($paramsPrev + [':pass' => PASS_SCORE]);
     $passRatePrev = (float)($prStmt->fetch()['pass_rate'] ?? 0.0);
 }
 
@@ -487,7 +510,7 @@ if ($effectiveExamId > 0) {
 $trendSql = "
   SELECT
     e.id AS exam_id,
-    CONCAT(e.academic_year, ' T', COALESCE(e.term,'-'), ' — ', e.exam_name) AS label,
+    CONCAT(e.academic_year, ' T', COALESCE(e.term,'-'), ' - ', e.exam_name) AS label,
     COALESCE(e.exam_date, '0000-00-00') AS d,
     AVG(r.score) AS avg_score
   FROM results r
@@ -523,10 +546,29 @@ $jsSelectedTrendIndex = json_encode($selectedTrendIndex, JSON_UNESCAPED_UNICODE)
 // -------------------- Layout --------------------
 require_once __DIR__ . '/header.php';
 
-$fullReportsUrl = '/teacher/reports.php' . (($_GET) ? ('?' . qs_merge()) : '');
+$fullReportsUrl = $reportsBaseUrl . (($_GET) ? ('?' . qs_merge()) : '');
 
 $hasPrev = ($prevExamId > 0);
 $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam available for comparison';
+
+$activeFilters = [];
+if ($year !== '') {
+    $activeFilters[] = ['label' => 'Year: ' . $year, 'href' => $dashboardUrl . '?' . qs_merge(['year' => null])];
+}
+if ($examIdIn > 0) {
+    $activeFilters[] = ['label' => 'Exam: ' . $examLabel, 'href' => $dashboardUrl . '?' . qs_merge(['exam_id' => null])];
+}
+if ($classCode !== '') {
+    $activeFilters[] = ['label' => 'Class: ' . $classCode, 'href' => $dashboardUrl . '?' . qs_merge(['class_code' => null])];
+}
+if ($track !== '') {
+    $activeFilters[] = ['label' => 'Track: ' . $track, 'href' => $dashboardUrl . '?' . qs_merge(['track' => null])];
+}
+if ($subjectId > 0) {
+    $subjectName = $subjectNameById[$subjectId] ?? ('ID ' . $subjectId);
+    $activeFilters[] = ['label' => 'Subject: ' . $subjectName, 'href' => $dashboardUrl . '?' . qs_merge(['subject_id' => null])];
+}
+$activeFilterCount = count($activeFilters);
 ?>
 
 <style nonce="<?= h($cspNonce) ?>">
@@ -538,6 +580,8 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
   .mover-name a:hover{ text-decoration:underline; }
   .mover-icon{ width:1.25rem; text-align:center; opacity:.85; }
   .mover-count{ font-size:.78rem; }
+  .filter-chip{ text-decoration:none; border-radius:999px; }
+  .filter-chip:hover{ background:rgba(13,110,253,.08); }
 </style>
 
 <div class="container-fluid py-3">
@@ -565,7 +609,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
     </div>
 
     <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-outline-secondary" href="/teacher/dashboard.php">
+      <a class="btn btn-outline-secondary" href="<?= h($dashboardUrl) ?>">
         <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
       </a>
       <a class="btn btn-primary" href="<?= h($fullReportsUrl) ?>">
@@ -595,11 +639,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
             <?php foreach ($exams as $e): ?>
               <?php
                 $id = (int)$e['id'];
-                $ay = (string)$e['academic_year'];
-                $t  = ($e['term'] === null) ? '-' : (string)$e['term'];
-                $nm = (string)$e['exam_name'];
-                $d  = (string)($e['exam_date'] ?? '');
-                $label = trim($ay . ' T' . $t . ' — ' . $nm . ($d !== '' ? ' (' . $d . ')' : ''));
+                $label = exam_label($e);
               ?>
               <option value="<?= $id ?>" <?= ($id === $examIdIn) ? 'selected' : '' ?>><?= h($label) ?></option>
             <?php endforeach; ?>
@@ -642,6 +682,23 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
           </button>
         </div>
       </form>
+
+      <?php if ($activeFilterCount > 0): ?>
+        <div class="mt-3 d-flex flex-wrap align-items-center gap-2">
+          <span class="text-muted small">Active filters:</span>
+          <?php foreach ($activeFilters as $filter): ?>
+            <a class="badge text-bg-light border text-dark-emphasis filter-chip"
+               href="<?= h($filter['href']) ?>">
+              <?= h($filter['label']) ?> <i class="bi bi-x-circle ms-1"></i>
+            </a>
+          <?php endforeach; ?>
+          <a class="btn btn-link btn-sm p-0 ms-1" href="<?= h($dashboardUrl) ?>">Clear all</a>
+        </div>
+      <?php else: ?>
+        <div class="text-muted small mt-3">
+          Tip: apply class or subject filters to make the trend and movers more actionable.
+        </div>
+      <?php endif; ?>
     </div>
   </div>
 
@@ -700,7 +757,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start">
             <div>
-              <div class="text-muted small">Pass rate (≥ <?= h(number_format($PASS, 0)) ?>)</div>
+              <div class="text-muted small">Pass rate (≥ <?= h(number_format(PASS_SCORE, 0)) ?>)</div>
               <div class="display-6 mb-0">
                 <?= ($passRateNow === null) ? '—' : h(number_format($passRateNow * 100, 1)) . '%' ?>
               </div>
@@ -710,7 +767,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
             </span>
           </div>
           <div class="text-muted small mt-2">
-            Targets: Pass <?= h((string)$PASS) ?> · Good <?= h((string)$GOOD) ?> · Excellent <?= h((string)$EXCELLENT) ?>
+            Targets: Pass <?= h((string)PASS_SCORE) ?> · Good <?= h((string)GOOD_SCORE) ?> · Excellent <?= h((string)EXCELLENT_SCORE) ?>
           </div>
         </div>
       </div>
@@ -724,6 +781,9 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
           <div class="text-muted small">
             <?= ($track !== '') ? h($track) : 'All tracks' ?>
             <?= ($subjectId > 0) ? ' · One subject' : ' · All subjects' ?>
+          </div>
+          <div class="text-muted small mt-1">
+            Active filters: <?= h((string)$activeFilterCount) ?>
           </div>
           <div class="mt-3">
             <a class="btn btn-outline-primary btn-sm" href="<?= h($fullReportsUrl) ?>">
@@ -779,7 +839,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
                       <div class="d-flex align-items-start gap-2">
                         <div class="mover-icon text-success"><i class="bi bi-arrow-up-right"></i></div>
                         <div class="mover-name">
-                          <a href="/teacher/dashboard.php?<?= h(qs_merge(['subject_id' => (int)$m['subject_id']])) ?>">
+                          <a href="<?= h($dashboardUrl) ?>?<?= h(qs_merge(['subject_id' => (int)$m['subject_id']])) ?>">
                             <?= h($m['name']) ?>
                           </a>
                           <div class="mover-meta">
@@ -815,7 +875,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
                       <div class="d-flex align-items-start gap-2">
                         <div class="mover-icon text-danger"><i class="bi bi-arrow-down-right"></i></div>
                         <div class="mover-name">
-                          <a href="/teacher/dashboard.php?<?= h(qs_merge(['subject_id' => (int)$m['subject_id']])) ?>">
+                          <a href="<?= h($dashboardUrl) ?>?<?= h(qs_merge(['subject_id' => (int)$m['subject_id']])) ?>">
                             <?= h($m['name']) ?>
                           </a>
                           <div class="mover-meta">
@@ -848,7 +908,10 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
               <i class="bi bi-bar-chart me-1"></i> Histogram
             </span>
           </div>
-          <canvas id="distChart" height="150"></canvas>
+          <canvas id="distChart" height="150" aria-label="Score distribution chart"></canvas>
+          <div id="distNoData" class="text-muted small mt-2 d-none">
+            No score rows available for this distribution.
+          </div>
           <div class="text-muted small mt-2">
             Use this to detect “clumping” (too many low scores) or an “easy” paper (many 35+).
           </div>
@@ -868,7 +931,10 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
               <i class="bi bi-graph-up me-1"></i> Trend
             </span>
           </div>
-          <canvas id="trendChart" height="150"></canvas>
+          <canvas id="trendChart" height="150" aria-label="Trend chart"></canvas>
+          <div id="trendNoData" class="text-muted small mt-2 d-none">
+            Not enough trend points in the current scope.
+          </div>
           <div class="text-muted small mt-2">
             Tip: Apply a Subject filter to get a clearer learning progression signal.
           </div>
@@ -935,7 +1001,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
                       <td class="text-end d-none d-lg-table-cell"><?= h((string)$r['n']) ?></td>
                       <td class="text-end">
                         <a class="btn btn-outline-secondary btn-sm"
-                           href="/teacher/dashboard.php?<?= h(qs_merge(['subject_id' => (int)$r['subject_id']])) ?>">
+                           href="<?= h($dashboardUrl) ?>?<?= h(qs_merge(['subject_id' => (int)$r['subject_id']])) ?>">
                           View
                         </a>
                       </td>
@@ -1005,7 +1071,7 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
                             </td>
                           <?php endif; ?>
                           <td class="text-end">
-                            <a class="btn btn-outline-secondary btn-sm" href="/teacher/pupil.php?id=<?= (int)$r['id'] ?>">
+                            <a class="btn btn-outline-secondary btn-sm" href="<?= h($pupilBaseUrl) ?>?id=<?= (int)$r['id'] ?>">
                               Profile
                             </a>
                           </td>
@@ -1088,6 +1154,9 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
 
   const trendLabels = <?= $jsTrendLabels ?>;
   const trendData   = <?= $jsTrendData ?>;
+  const passScore = <?= json_encode(PASS_SCORE) ?>;
+  const goodScore = <?= json_encode(GOOD_SCORE) ?>;
+  const excellentScore = <?= json_encode(EXCELLENT_SCORE) ?>;
 
   const selectedIndex = <?= $jsSelectedTrendIndex ?>;
 
@@ -1095,38 +1164,107 @@ $subTitle = $hasPrev ? ('Compared to: ' . $prevLabel) : 'No previous exam availa
     if (!window.Chart) return;
 
     const distEl = document.getElementById('distChart');
+    const distNoDataEl = document.getElementById('distNoData');
     if (distEl) {
+      const hasDistData = Array.isArray(distData) && distData.some((v) => Number(v) > 0);
+      if (!hasDistData) {
+        distEl.classList.add('d-none');
+        if (distNoDataEl) distNoDataEl.classList.remove('d-none');
+      } else {
+        const distColors = distData.map((_, i) => {
+          const bucketStart = i * 5;
+          if (bucketStart < passScore) return 'rgba(220,53,69,0.78)';
+          if (bucketStart < goodScore) return 'rgba(255,193,7,0.78)';
+          if (bucketStart < excellentScore) return 'rgba(13,110,253,0.78)';
+          return 'rgba(25,135,84,0.78)';
+        });
+        const distBorder = distColors.map((c) => c.replace('0.78', '1'));
+
+        if (distNoDataEl) distNoDataEl.classList.add('d-none');
+        distEl.classList.remove('d-none');
+
       new Chart(distEl, {
         type: 'bar',
-        data: { labels: distLabels, datasets: [{ label: 'Count', data: distData }] },
+        data: {
+          labels: distLabels,
+          datasets: [{
+            label: 'Count',
+            data: distData,
+            backgroundColor: distColors,
+            borderColor: distBorder,
+            borderWidth: 1
+          }]
+        },
         options: {
           responsive: true,
-          plugins: { legend: { display: false } },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `Count: ${ctx.parsed.y}`
+              }
+            }
+          },
           scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
         }
       });
+      }
     }
 
     const trendEl = document.getElementById('trendChart');
+    const trendNoDataEl = document.getElementById('trendNoData');
     if (trendEl) {
+      const hasTrend = Array.isArray(trendData) && trendData.length > 0;
+      if (!hasTrend) {
+        trendEl.classList.add('d-none');
+        if (trendNoDataEl) trendNoDataEl.classList.remove('d-none');
+        return;
+      }
+
       const pointRadius = trendData.map((_, i) => (selectedIndex !== null && i === selectedIndex) ? 6 : 3);
       const pointHoverRadius = trendData.map((_, i) => (selectedIndex !== null && i === selectedIndex) ? 7 : 4);
+      const pointBg = trendData.map((_, i) => (selectedIndex !== null && i === selectedIndex) ? 'rgba(13,110,253,1)' : 'rgba(13,110,253,0.72)');
+
+      const thresholdDataset = (label, value, color) => ({
+        label,
+        data: trendData.map(() => value),
+        borderColor: color,
+        borderDash: [6, 4],
+        borderWidth: 1,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        tension: 0,
+      });
+
+      if (trendNoDataEl) trendNoDataEl.classList.add('d-none');
+      trendEl.classList.remove('d-none');
 
       new Chart(trendEl, {
         type: 'line',
         data: {
           labels: trendLabels,
-          datasets: [{
-            label: 'Average score',
-            data: trendData,
-            tension: 0.25,
-            pointRadius,
-            pointHoverRadius
-          }]
+          datasets: [
+            {
+              label: 'Average score',
+              data: trendData,
+              tension: 0.25,
+              pointRadius,
+              pointHoverRadius,
+              pointBackgroundColor: pointBg,
+              borderWidth: 2
+            },
+            thresholdDataset('Pass', passScore, 'rgba(220,53,69,0.8)'),
+            thresholdDataset('Good', goodScore, 'rgba(255,193,7,0.9)'),
+            thresholdDataset('Excellent', excellentScore, 'rgba(25,135,84,0.9)')
+          ]
         },
         options: {
           responsive: true,
-          plugins: { legend: { display: true } },
+          plugins: {
+            legend: { display: true },
+            tooltip: { mode: 'index', intersect: false }
+          },
+          interaction: { mode: 'index', intersect: false },
           scales: { y: { beginAtZero: true, suggestedMax: 40 } }
         }
       });

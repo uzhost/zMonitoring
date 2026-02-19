@@ -10,8 +10,11 @@ declare(strict_types=1);
       <!-- Print-only footer (page number + optional signature line) -->
       <footer class="print-footer only-print">
         <div class="d-flex justify-content-between align-items-center">
-          <div class="text-truncate">&copy; <?= h((string)date('Y')) ?> ZTIM</div>
-          <div class="mono">Sahifa: <span class="page"></span></div>
+          <div class="text-truncate pe-2">
+            <?= h((string)date('Y')) ?> &middot; <?= h((string)($pageTitle ?? 'Hisobot')) ?>
+          </div>
+          <div class="small text-nowrap me-2">Vaqt: <span id="printFooterStamp"><?= h((string)($printStamp ?? '')) ?></span></div>
+          <div class="mono text-nowrap">Sahifa: <span class="page"></span></div>
         </div>
       </footer>
 
@@ -22,6 +25,7 @@ declare(strict_types=1);
   (function () {
     var input = document.getElementById('reportStampInput');
     var text  = document.getElementById('reportStampText');
+    var footerStamp = document.getElementById('printFooterStamp');
     if (!input || !text) return;
 
     var key = 'ztim_print_stamp:' + location.pathname;
@@ -39,6 +43,7 @@ declare(strict_types=1);
       v = clamp(v);
       input.value = v;
       text.textContent = v;
+      if (footerStamp) footerStamp.textContent = v;
       if (persist) {
         try { localStorage.setItem(key, v); } catch (e) {}
       }

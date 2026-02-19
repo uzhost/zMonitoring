@@ -37,15 +37,15 @@ function diff_badge_class(?float $diff): string
 
 function diff_icon(?float $diff): string
 {
-    if ($diff === null) return '<span class="diff-icon text-muted" title="Ma’lumot yo‘q">—</span>';
-    if ($diff > 0) return '<span class="diff-icon text-success" title="O‘sish">▲</span>';
-    if ($diff < 0) return '<span class="diff-icon text-danger" title="Pasayish">▼</span>';
-    return '<span class="diff-icon text-muted" title="O‘zgarishsiz">→</span>';
+    if ($diff === null) return '<span class="diff-icon text-muted" title="Ma’lumot yo‘q">-</span>';
+    if ($diff > 0) return '<span class="diff-icon text-success" title="O‘sish">^</span>';
+    if ($diff < 0) return '<span class="diff-icon text-danger" title="Pasayish">v</span>';
+    return '<span class="diff-icon text-muted" title="O‘zgarishsiz">=</span>';
 }
 
 function fmt_score(?float $v): string
 {
-    if ($v === null) return '—';
+    if ($v === null) return '-';
     $s = number_format($v, 2, '.', '');
     return (str_ends_with($s, '.00')) ? substr($s, 0, -3) : rtrim(rtrim($s, '0'), '.');
 }
@@ -59,7 +59,7 @@ function safe_int(mixed $v, int $default = 0): int
 
 function exam_name_only(?array $e, int $fallbackId = 0): string
 {
-    if (!$e) return $fallbackId > 0 ? ('Imtihon #' . $fallbackId) : '—';
+    if (!$e) return $fallbackId > 0 ? ('Imtihon #' . $fallbackId) : '-';
     $name = trim((string)($e['exam_name'] ?? ''));
     return $name !== '' ? $name : ('Imtihon #' . (int)($e['id'] ?? $fallbackId));
 }
@@ -121,7 +121,7 @@ if ($subjectPick !== 'all') {
     $subjectId = $tmp > 0 ? $tmp : null;
 }
 
-// Bir xil imtihon tanlansa – 1-imtihonni bo‘shatamiz (UX)
+// Bir xil imtihon tanlansa - 1-imtihonni bo‘shatamiz (UX)
 if ($exam1Id > 0 && $exam2Id > 0 && $exam1Id === $exam2Id) {
     $exam1Id = 0;
 }
@@ -173,7 +173,7 @@ function fetch_class_rows(PDOStatement $stmtClass, string $classCode, int $subje
 }
 
 /* -----------------------------
-   “Barcha fanlar” tanlanganda faqat mavjud natijalar asosida fanlarni ko‘rsatish
+   Barcha fanlar tanlanganda faqat mavjud natijalar asosida fanlarni ko‘rsatish
 ----------------------------- */
 
 $subjectsById = [];
@@ -226,6 +226,21 @@ if ($subjectId === null) {
 /* -----------------------------
    Render
 ----------------------------- */
+$selectedSubjectLabel = 'Barcha fanlar';
+if ($subjectId !== null && isset($subjectsById[$subjectId])) {
+    $selectedSubjectLabel = (string)$subjectsById[$subjectId]['name'];
+}
+
+$page_title = 'Sinf Hisoboti';
+$report_title = 'Sinf kesimida taqqoslama tahlil';
+$report_subtitle = "Imtihonlar bo‘yicha qiyosiy natijalar";
+$report_meta = [
+    'Sinf' => $classCode !== '' ? $classCode : '-',
+    'Fan' => $selectedSubjectLabel,
+    '1-imtihon' => $exam1Name,
+    '2-imtihon' => $exam2Name,
+];
+
 require __DIR__ . '/p-header.php';
 ?>
 
@@ -258,7 +273,7 @@ require __DIR__ . '/p-header.php';
   /* Farq ustuni markazda */
   th.diff-col, td.diff-cell { text-align: center !important; }
 
-  /* Score ustunlari ham markazda (o‘rtacha satrda “siljish” bartaraf etiladi) */
+  /* Score ustunlari ham markazda (ortacha satrda siljish bartaraf etiladi) */
   th.score-col, td.score-cell { 
   text-align: center !important;
     }
@@ -270,6 +285,19 @@ require __DIR__ . '/p-header.php';
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .pupil-line{
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+  }
+  .pupil-no{
+    display: inline-flex;
+    min-width: 1.45rem;
+    justify-content: flex-end;
+    color: #64748b;
+    font-weight: 700;
+  }
+  .pupil-cell{ padding-left: .55rem !important; }
 
   .compare-table td, .compare-table th{
     padding-top: .20rem;
@@ -398,6 +426,90 @@ require __DIR__ . '/p-header.php';
   .print-title { font-size: 15px; font-weight: 800; letter-spacing: .2px; }
   .print-meta { font-size: 12px; color: #444; }
   .print-kpi { font-size: 12px; }
+
+  /* Print-friendly overrides */
+  .subject-card {
+    border: 1px solid rgba(15, 23, 42, .14);
+    box-shadow: 0 6px 16px rgba(15, 23, 42, .06);
+  }
+  .subject-header {
+    border-bottom: 1px solid rgba(15, 23, 42, .14);
+    background: linear-gradient(180deg, #f9fbff 0%, #ffffff 88%);
+  }
+  .name-col { width: 46% !important; min-width: 220px !important; }
+  .score-col, .diff-col { width: 18% !important; }
+  .score-pill, .diff-pill, .avg-num { min-width: 4.2rem; }
+
+  @media print {
+    body {
+      color: #111827 !important;
+      font-size: 11px !important;
+      line-height: 1.24 !important;
+    }
+    #mainContent {
+      padding-top: 0 !important;
+      padding-bottom: 16mm !important;
+    }
+    .container-fluid {
+      padding: 0 1.8mm !important;
+      margin: 0 !important;
+      max-width: none !important;
+    }
+    .pupil-cell{ padding-left: .75rem !important; }
+    .subject-card {
+      margin-bottom: 5mm !important;
+      border-radius: 8px !important;
+      break-inside: avoid-page !important;
+    }
+    .subject-header {
+      background: #fff !important;
+      padding: 6px 8px !important;
+      border-bottom: 1px solid rgba(0, 0, 0, .25) !important;
+    }
+    .subject-card .card-body { padding: 6px !important; }
+    .table-responsive {
+      overflow: visible !important;
+      border: 0 !important;
+      border-radius: 0 !important;
+      background: transparent !important;
+    }
+    .compare-table {
+      border-collapse: collapse !important;
+      table-layout: fixed !important;
+    }
+    .compare-table th,
+    .compare-table td {
+      padding: .1rem .22rem !important;
+      border: 1px solid rgba(0, 0, 0, .18) !important;
+      background: #fff !important;
+    }
+    .compare-table tbody tr:nth-child(even) td {
+      background: #f8fafc !important;
+    }
+    .compare-table .table-light > td,
+    .compare-table .table-light > th {
+      background: #eef2f7 !important;
+    }
+    .score-pill,
+    .diff-pill,
+    .avg-num {
+      min-width: 3.9rem !important;
+      height: 1.35rem !important;
+      font-size: .8rem !important;
+      border: 1px solid rgba(0, 0, 0, .2) !important;
+    }
+    .badge {
+      box-shadow: none !important;
+      text-shadow: none !important;
+    }
+    .page-break {
+      display: block !important;
+      break-after: page !important;
+      page-break-after: always !important;
+      height: 0 !important;
+      margin: 0 !important;
+    }
+  }
 </style>
 
 <div class="container-fluid py-4">
@@ -406,7 +518,7 @@ require __DIR__ . '/p-header.php';
   <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3 no-print">
     <div class="d-flex align-items-center gap-2 flex-wrap">
       <h1 class="h4 mb-0">
-        <i class="bi bi-clipboard-data me-2"></i>Sinf kesimidagi taqqoslama tahlil
+        <i class="bi bi-clipboard-data me-2"></i>Sinf kesimida taqqoslama tahlil
       </h1>
       <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">
         <i class="bi bi-people me-1"></i><?= h($classCode) ?>
@@ -422,16 +534,13 @@ require __DIR__ . '/p-header.php';
         <i class="bi bi-journal-text me-1"></i><?= h($exam2Name) ?>
       </span>
 
-      <button type="button" class="btn btn-outline-dark ms-2" onclick="window.print()">
-        <i class="bi bi-printer me-1"></i>Chop etish
-      </button>
     </div>
   </div>
 
   <!-- FILTRLAR -->
   <div class="card shadow-sm mb-3 no-print">
     <div class="card-body">
-      <form class="row g-2 align-items-end" method="get" action="hisobot.php">
+      <form class="row g-2 align-items-end" method="get" action="/teacher/p-hisobot.php">
 
         <div class="col-12 col-md-3">
           <label class="form-label mb-1">Sinf</label>
@@ -458,7 +567,7 @@ require __DIR__ . '/p-header.php';
         <div class="col-12 col-md-3">
           <label class="form-label mb-1">1-imtihon</label>
           <select name="exam1_id" class="form-select">
-            <option value="0">—</option>
+            <option value="0">-</option>
             <?php foreach ($exams as $e): ?>
               <?php $id = (int)$e['id']; ?>
               <option value="<?= $id ?>"<?= ($id === $exam1Id) ? ' selected' : '' ?>>
@@ -471,7 +580,7 @@ require __DIR__ . '/p-header.php';
         <div class="col-12 col-md-3">
           <label class="form-label mb-1">2-imtihon</label>
           <select name="exam2_id" class="form-select">
-            <option value="0">—</option>
+            <option value="0">-</option>
             <?php foreach ($exams as $e): ?>
               <?php $id = (int)$e['id']; ?>
               <option value="<?= $id ?>"<?= ($id === $exam2Id) ? ' selected' : '' ?>>
@@ -485,17 +594,17 @@ require __DIR__ . '/p-header.php';
           <button class="btn btn-primary">
             <i class="bi bi-funnel me-1"></i>Qo‘llash
           </button>
-          <a class="btn btn-outline-secondary" href="hisobot.php">
+          <a class="btn btn-outline-secondary" href="/teacher/p-hisobot.php">
             <i class="bi bi-arrow-counterclockwise me-1"></i>Qayta tiklash
           </a>
 
           <div class="ms-auto text-muted small d-flex flex-wrap gap-2 align-items-center">
-            <span class="fw-semibold">Me’zon (foiz):</span>
+            <span class="fw-semibold">Mezon (foiz):</span>
             <span class="badge text-bg-danger">&lt;46%</span>
             <span class="badge text-bg-warning text-dark">&lt;66%</span>
             <span class="badge text-bg-primary">&lt;86%</span>
             <span class="badge text-bg-success">&ge;86%</span>
-            <span class="ms-2">Farq: ▲/▼/→</span>
+            <span class="ms-2">Farq: ^ / v / =</span>
           </div>
         </div>
 
@@ -517,21 +626,21 @@ require __DIR__ . '/p-header.php';
         $rows = fetch_class_rows($stmtClass, $classCode, $sid, $exam1Id, $exam2Id);
         $avgs = calc_avgs($rows);
 
-        $avgDiffStr = ($avgs['avgd'] === null) ? '—' : (($avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$avgs['avgd']));
+        $avgDiffStr = ($avgs['avgd'] === null) ? '-' : (($avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$avgs['avgd']));
       ?>
 
       <!-- PRINT: sarlavha (har bir fan bo‘limi oldidan) -->
       <div class="print-only mb-2">
-        <div class="print-title">Sinf: <?= h($classCode) ?> — fanlar kesimida tahlil</div>
+        <div class="print-title">Sinf: <?= h($classCode) ?> - fanlar kesimida tahlil</div>
         <div class="print-meta">
           <?= h($exam1Name) ?> va <?= h($exam2Name) ?> qiyosiy tahlili.
           Fan: <?= h($sname) ?>.
         </div>
         <div class="print-kpi mt-1">
           O‘quvchilar soni: <span class="fw-semibold"><?= (int)$avgs['n'] ?></span>.
-          O‘rtacha ball: <?= h($exam1Name) ?> — <span class="fw-semibold"><?= h(fmt_score($avgs['avg1'])) ?></span>,
-          <?= h($exam2Name) ?> — <span class="fw-semibold"><?= h(fmt_score($avgs['avg2'])) ?></span>,
-          Farq — <span class="fw-semibold"><?= h($avgDiffStr) ?></span>.
+          O‘rtacha ball: <?= h($exam1Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg1'])) ?></span>,
+          <?= h($exam2Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg2'])) ?></span>,
+          Farq - <span class="fw-semibold"><?= h($avgDiffStr) ?></span>.
         </div>
         <hr class="my-2">
       </div>
@@ -569,19 +678,21 @@ require __DIR__ . '/p-header.php';
               </thead>
               <tbody>
                 <?php if (!$rows): ?>
-                  <tr><td colspan="5" class="text-muted">Ushbu fan bo‘yicha o‘quvchilar ro‘yxati topilmadi.</td></tr>
+                  <tr><td colspan="4" class="text-muted">Ushbu fan bo‘yicha o‘quvchilar ro‘yxati topilmadi.</td></tr>
                 <?php else: ?>
-                  <?php foreach ($rows as $r): ?>
+                  <?php foreach ($rows as $rowIdx => $r): ?>
                     <?php
                       $s1 = $r['score1'];
                       $s2 = $r['score2'];
                       $diff = ($s1 !== null && $s2 !== null) ? ($s2 - $s1) : null;
                       $pupilName = trim((string)$r['surname'] . ' ' . (string)$r['name']);
-                      $g = $r['class_group'];
                     ?>
                     <tr>
-                      <td class="fw-medium">
-                        <span class="pupil-name" title="<?= h_attr($pupilName) ?>"><?= h($pupilName) ?></span>
+                      <td class="fw-medium pupil-cell">
+                        <span class="pupil-line">
+                          <span class="pupil-no mono"><?= (int)$rowIdx + 1 ?>.</span>
+                          <span class="pupil-name" title="<?= h_attr($pupilName) ?>"><?= h($pupilName) ?></span>
+                        </span>
                       </td>
 
                       <td class="mono score-cell">
@@ -600,7 +711,7 @@ require __DIR__ . '/p-header.php';
                         <span class="diff-wrap">
                           <?= diff_icon($diff) ?>
                           <span class="badge diff-pill <?= h_attr(diff_badge_class($diff)) ?> mono">
-                            <?= $diff === null ? '—' : h(($diff > 0 ? '+' : '') . fmt_score($diff)) ?>
+                            <?= $diff === null ? '-' : h(($diff > 0 ? '+' : '') . fmt_score($diff)) ?>
                           </span>
                         </span>
                       </td>
@@ -634,7 +745,7 @@ require __DIR__ . '/p-header.php';
       </div>
 
       <?php if ($idx < count($subjectsToShow) - 1): ?>
-        <div class="page-break"></div>
+        <div class="page-break print-only"></div>
       <?php endif; ?>
 
     <?php endforeach; ?>
@@ -644,3 +755,4 @@ require __DIR__ . '/p-header.php';
 </div>
 
 <?php require __DIR__ . '/p-footer.php'; ?>
+

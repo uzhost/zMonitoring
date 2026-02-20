@@ -239,7 +239,7 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
   <div class="container-fluid">
     <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="dashboard.php">
       <span class="brand-mark"><i class="bi bi-mortarboard"></i></span>
-      <span>Exam Analytics</span>
+      <span>School Analytics</span>
     </a>
 
     <button
@@ -315,10 +315,22 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
                 <i class="bi bi-calculator me-2"></i> WM Subjects
               </a>
             </li>
+            <li>
+              <a class="dropdown-item<?= $active('wm_exams.php') ?>" href="wm_exams.php">
+                <i class="bi bi-calendar2-week me-2"></i> WM Exams
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('wm_results.php') ?>" href="wm_results.php">
+                <i class="bi bi-table me-2"></i> WM Results
+              </a>
+            </li>
             <li><hr class="dropdown-divider"></li>
-            <li><span class="dropdown-item-text text-light small opacity-75">WM Exams (coming soon)</span></li>
-            <li><span class="dropdown-item-text text-light small opacity-75">WM Results (coming soon)</span></li>
-            <li><span class="dropdown-item-text text-light small opacity-75">WM Reports (coming soon)</span></li>
+            <li>
+              <a class="dropdown-item<?= $active('wm_reports.php') ?>" href="wm_reports.php">
+                <i class="bi bi-graph-up-arrow me-2"></i> WM Reports
+              </a>
+            </li>
           </ul>
         </li>
 

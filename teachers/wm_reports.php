@@ -1,10 +1,15 @@
 <?php
-// teacher/wm_reports.php - Read-only WM results report for teacher portal
+// teachers/wm_reports.php - Read-only WM results report for teacher portal
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/_guard.php';
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/wm_reports.php';
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 function wtr_get_int(string $key): int
 {
@@ -58,6 +63,19 @@ function wtr_column_exists(PDO $pdo, string $table, string $column): bool
     return (bool)$st->fetchColumn();
 }
 
+$teacherCtx = (isset($GLOBALS['tguard_current_teacher']) && is_array($GLOBALS['tguard_current_teacher']))
+    ? $GLOBALS['tguard_current_teacher']
+    : ((isset($_SESSION['teacher']) && is_array($_SESSION['teacher'])) ? $_SESSION['teacher'] : []);
+$teacherLevel = (int)($teacherCtx['level'] ?? teacher_level());
+$teacherClassId = (int)($teacherCtx['class_id'] ?? teacher_class_id());
+$teacherClassCode = trim((string)($teacherCtx['class_code'] ?? ''));
+$restrictToOwnClass = in_array($teacherLevel, [2, 3], true);
+$scopeBroken = $restrictToOwnClass && ($teacherClassId <= 0 && $teacherClassCode === '');
+$scopeLabel = null;
+if ($restrictToOwnClass && !$scopeBroken) {
+    $scopeLabel = $teacherClassCode !== '' ? $teacherClassCode : ('Class #' . $teacherClassId);
+}
+
 $classCode = wtr_get_str('class_code', 30);
 $studyYearId = wtr_get_int('study_year_id');
 $examId = wtr_get_int('exam_id');
@@ -94,8 +112,6 @@ $totalPages = 1;
 $summary = ['total' => 0, 'avg' => null, 'min' => null, 'max' => null];
 
 $schemaReady = false;
-$hasPupilTrack = false;
-$hasResultCreated = false;
 
 try {
     $schemaReady = wtr_table_exists($pdo, 'wm_results')
@@ -108,15 +124,43 @@ try {
         wtr_flash('danger', 'Schema mismatch: wm_results/wm_exams/wm_subjects/study_year with wm_exams.study_year_id is required.');
     }
 
-    $hasPupilTrack = wtr_column_exists($pdo, 'pupils', 'track');
-    $hasResultCreated = wtr_column_exists($pdo, 'wm_results', 'created_at');
+    if ($restrictToOwnClass) {
+        $classSql = "
+            SELECT class_code, COUNT(*) AS cnt
+            FROM pupils
+        ";
+        $classParams = [];
+        if ($teacherClassId > 0) {
+            $classSql .= " WHERE class_id = :scope_class_id";
+            $classParams[':scope_class_id'] = $teacherClassId;
+        } else {
+            $classSql .= " WHERE class_code = :scope_class_code";
+            $classParams[':scope_class_code'] = $teacherClassCode;
+        }
+        $classSql .= " GROUP BY class_code ORDER BY class_code ASC";
+        $stClass = $pdo->prepare($classSql);
+        foreach ($classParams as $k => $v) {
+            $stClass->bindValue($k, $v, is_int($v) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stClass->execute();
+        $classOptions = $stClass->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } else {
+        $classOptions = $pdo->query("
+            SELECT class_code, COUNT(*) AS cnt
+            FROM pupils
+            GROUP BY class_code
+            ORDER BY class_code ASC
+        ")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
 
-    $classOptions = $pdo->query("
-        SELECT class_code, COUNT(*) AS cnt
-        FROM pupils
-        GROUP BY class_code
-        ORDER BY class_code ASC
-    ")->fetchAll(PDO::FETCH_ASSOC);
+    $allowedClassCodes = [];
+    foreach ($classOptions as $c) {
+        $cc = trim((string)($c['class_code'] ?? ''));
+        if ($cc !== '') $allowedClassCodes[$cc] = true;
+    }
+    if ($classCode !== '' && !isset($allowedClassCodes[$classCode])) {
+        $classCode = '';
+    }
 
     if ($schemaReady) {
         $yearOptions = $pdo->query("
@@ -139,9 +183,8 @@ try {
         $hasExamCycle = wtr_column_exists($pdo, 'wm_exams', 'cycle_no');
         $cycleExpr = $hasExamCycle ? 'e.cycle_no' : 'NULL AS cycle_no';
         $examSql = "
-            SELECT e.id, e.study_year_id, sy.year_code AS study_year_code, $cycleExpr, e.exam_name, e.exam_date
+            SELECT e.id, e.study_year_id, $cycleExpr, e.exam_name, e.exam_date
             FROM wm_exams e
-            INNER JOIN study_year sy ON sy.id = e.study_year_id
         ";
         if ($studyYearId > 0) {
             $examSql .= " WHERE e.study_year_id = :sy_id";
@@ -182,9 +225,19 @@ try {
         }
     }
 
-    if ($schemaReady) {
+    if ($schemaReady && !$scopeBroken) {
         $where = [];
         $params = [];
+
+        if ($restrictToOwnClass) {
+            if ($teacherClassId > 0) {
+                $where[] = 'p.class_id = :scope_class_id';
+                $params[':scope_class_id'] = $teacherClassId;
+            } else {
+                $where[] = 'p.class_code = :scope_class_code';
+                $params[':scope_class_code'] = $teacherClassCode;
+            }
+        }
 
         if ($studyYearId > 0) {
             $where[] = 'e.study_year_id = :study_year_id';
@@ -216,9 +269,6 @@ try {
         }
 
         $whereSql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-        $trackExpr = $hasPupilTrack ? 'p.track' : "'' AS track";
-        $createdExpr = $hasResultCreated ? 'wr.created_at' : 'NULL AS created_at';
-
         $countStmt = $pdo->prepare("
             SELECT COUNT(*)
             FROM wm_results wr
@@ -256,18 +306,14 @@ try {
             SELECT
               wr.id,
               wr.score,
-              $createdExpr,
               p.class_code,
               p.id AS pupil_id,
               p.surname,
               p.name,
-              $trackExpr,
               e.exam_name,
               e.exam_date,
-              e.cycle_no,
-              sy.year_code AS study_year_code,
+              " . ($hasExamCycle ? "e.cycle_no" : "NULL AS cycle_no") . ",
               ws.name AS subject_name,
-              ws.code AS subject_code,
               ws.max_points
             FROM wm_results wr
             INNER JOIN pupils p ON p.id = wr.pupil_id
@@ -296,15 +342,47 @@ $page_subtitle = 'Read-only weekly monitoring results';
 require_once __DIR__ . '/header.php';
 ?>
 
+<style>
+  .wm-report-card {
+    border-radius: 0.9rem;
+  }
+  .wm-chip {
+    border-radius: 999px;
+    padding: 0.35rem 0.6rem;
+    font-weight: 600;
+  }
+  .wm-table thead th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #5c6675;
+  }
+  .wm-subject-pill {
+    font-weight: 600;
+  }
+  .wm-score {
+    font-weight: 700;
+    color: #112a4a;
+    white-space: nowrap;
+  }
+</style>
+
 <div class="row g-3">
   <div class="col-12">
-    <div class="card shadow-sm border-0">
+    <div class="card shadow-sm border-0 wm-report-card">
       <div class="card-body p-3 p-lg-4">
         <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
           <div class="small text-uppercase text-muted fw-semibold">Filters</div>
           <div class="small text-muted">Loaded rows: <span class="fw-semibold"><?= h((string)$totalRows) ?></span></div>
         </div>
-        <form method="get" action="/teacher/wm_reports.php" class="row g-3 align-items-end">
+        <form method="get" action="/teachers/wm_reports.php" class="row g-3 align-items-end">
+          <?php if ($scopeLabel !== null): ?>
+            <div class="col-12">
+              <span class="badge text-bg-light border text-dark">
+                <i class="bi bi-funnel me-1"></i>Scope: <?= h($scopeLabel) ?>
+              </span>
+            </div>
+          <?php endif; ?>
           <div class="col-12 col-lg-2">
             <label class="form-label small text-uppercase text-muted fw-semibold mb-1">Year</label>
             <select class="form-select shadow-sm" name="study_year_id">
@@ -341,7 +419,6 @@ require_once __DIR__ . '/header.php';
               <?php foreach ($examOptions as $e): ?>
                 <?php
                   $eid = (int)$e['id'];
-                  $ey = (string)$e['study_year_code'];
                   $cy = $e['cycle_no'] !== null ? ('C' . (int)$e['cycle_no']) : 'C-';
                   $en = (string)$e['exam_name'];
                   $ed = (string)$e['exam_date'];
@@ -390,7 +467,7 @@ require_once __DIR__ . '/header.php';
               <button class="btn btn-primary" type="submit">
                 <i class="bi bi-funnel me-1"></i>Load
               </button>
-              <a href="/teacher/wm_reports.php" class="btn btn-outline-secondary">Reset</a>
+              <a href="/teachers/wm_reports.php" class="btn btn-outline-secondary">Reset</a>
             </div>
           </div>
         </form>
@@ -398,25 +475,25 @@ require_once __DIR__ . '/header.php';
     </div>
   </div>
 
-  <?php if ($schemaReady && ($totalRows > 0 || $classCode !== '' || $studyYearId > 0 || $examId > 0 || $subjectId > 0 || $q !== '')): ?>
+  <?php if ($schemaReady && !$scopeBroken && ($totalRows > 0 || $classCode !== '' || $studyYearId > 0 || $examId > 0 || $subjectId > 0 || $q !== '')): ?>
     <div class="col-12">
-      <div class="card shadow-sm border-0">
+      <div class="card shadow-sm border-0 wm-report-card">
         <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-2">
           <div class="d-flex flex-wrap align-items-center gap-2 small">
-            <span class="badge text-bg-light border">Year: <?= $selectedYear ? h((string)$selectedYear['year_code']) : 'All years' ?></span>
-            <span class="badge text-bg-light border">Exam: <?= $selectedExam ? h((string)$selectedExam['exam_name']) : 'All exams' ?></span>
+            <span class="badge text-bg-light border wm-chip">Year: <?= $selectedYear ? h((string)$selectedYear['year_code']) : 'All years' ?></span>
+            <span class="badge text-bg-light border wm-chip">Exam: <?= $selectedExam ? h((string)$selectedExam['exam_name']) : 'All exams' ?></span>
             <?php if ($selectedSubject): ?>
-              <span class="badge text-bg-light border">Subject: <?= h((string)$selectedSubject['name']) ?></span>
+              <span class="badge text-bg-light border wm-chip">Subject: <?= h((string)$selectedSubject['name']) ?></span>
             <?php endif; ?>
             <?php if ($classCode !== ''): ?>
-              <span class="badge text-bg-light border">Class: <?= h($classCode) ?></span>
+              <span class="badge text-bg-light border wm-chip">Class: <?= h($classCode) ?></span>
             <?php endif; ?>
           </div>
           <div class="d-flex flex-wrap align-items-center gap-2 small">
-            <span class="badge text-bg-primary">Total <?= h((string)$summary['total']) ?></span>
-            <span class="badge text-bg-secondary">Avg <?= $summary['avg'] !== null ? h(number_format((float)$summary['avg'], 2, '.', '')) : '-' ?></span>
-            <span class="badge text-bg-secondary">Min <?= $summary['min'] !== null ? h(number_format((float)$summary['min'], 2, '.', '')) : '-' ?></span>
-            <span class="badge text-bg-secondary">Max <?= $summary['max'] !== null ? h(number_format((float)$summary['max'], 2, '.', '')) : '-' ?></span>
+            <span class="badge text-bg-primary wm-chip">Total <?= h((string)$summary['total']) ?></span>
+            <span class="badge text-bg-secondary wm-chip">Avg <?= $summary['avg'] !== null ? h(number_format((float)$summary['avg'], 2, '.', '')) : '-' ?></span>
+            <span class="badge text-bg-secondary wm-chip">Min <?= $summary['min'] !== null ? h(number_format((float)$summary['min'], 2, '.', '')) : '-' ?></span>
+            <span class="badge text-bg-secondary wm-chip">Max <?= $summary['max'] !== null ? h(number_format((float)$summary['max'], 2, '.', '')) : '-' ?></span>
           </div>
         </div>
       </div>
@@ -424,26 +501,25 @@ require_once __DIR__ . '/header.php';
   <?php endif; ?>
 
   <div class="col-12">
-    <div class="card shadow-sm border-0">
+    <div class="card shadow-sm border-0 wm-report-card">
       <div class="card-body">
         <?php if (!$schemaReady): ?>
           <div class="text-danger">Required WM report schema is not available.</div>
+        <?php elseif ($scopeBroken): ?>
+          <div class="text-warning">Your account is scoped to own class data, but no class is assigned to this teacher profile.</div>
         <?php elseif (!$rows): ?>
           <div class="text-muted">No WM results found for selected filters.</div>
         <?php else: ?>
           <div class="table-responsive">
-            <table class="table table-sm table-hover table-striped align-middle mb-0">
+            <table class="table table-sm table-hover table-striped align-middle mb-0 wm-table">
               <thead class="table-light">
                 <tr>
                   <th style="width: 60px;">#</th>
                   <th style="width: 110px;">Class</th>
                   <th>Pupil</th>
-                  <th style="width: 190px;">Subject</th>
-                  <th style="width: 220px;">Exam</th>
-                  <th style="width: 110px;">Track</th>
+                  <th style="width: 180px;">Subject</th>
+                  <th style="width: 260px;">Exam</th>
                   <th style="width: 130px;" class="text-end">Score</th>
-                  <th style="width: 110px;" class="text-end">Percent</th>
-                  <th style="width: 120px;">Saved at</th>
                 </tr>
               </thead>
               <tbody>
@@ -451,22 +527,20 @@ require_once __DIR__ . '/header.php';
                   <?php
                     $full = trim((string)$r['surname'] . ' ' . (string)$r['name']);
                     $score = (float)$r['score'];
-                    $max = (float)$r['max_points'];
-                    $pct = $max > 0 ? ($score / $max) * 100.0 : 0.0;
-                    $savedAt = isset($r['created_at']) && $r['created_at'] !== null ? (string)$r['created_at'] : '-';
-                    $examLine = (string)$r['study_year_code'] . ' | ' . ($r['cycle_no'] !== null ? ('C' . (int)$r['cycle_no']) : 'C-')
-                      . ' | ' . (string)$r['exam_name'] . ' (' . (string)$r['exam_date'] . ')';
+                    $examName = (string)$r['exam_name'];
+                    $examCycle = $r['cycle_no'] !== null ? ('M' . (int)$r['cycle_no']) : 'M-';
+                    $examDate = (string)$r['exam_date'];
                   ?>
                   <tr>
                     <td class="text-muted"><?= h((string)(($page - 1) * $perPage + $idx + 1)) ?></td>
                     <td><span class="badge text-bg-light border"><?= h((string)$r['class_code']) ?></span></td>
                     <td class="fw-semibold"><?= h($full !== '' ? $full : ('Pupil #' . (int)$r['pupil_id'])) ?></td>
-                    <td><?= h((string)$r['subject_name']) ?></td>
-                    <td><?= h($examLine) ?></td>
-                    <td><?= h((string)$r['track']) ?></td>
-                    <td class="text-end"><?= h(number_format($score, 2, '.', '')) ?> / <?= h((string)$r['max_points']) ?></td>
-                    <td class="text-end"><?= h(number_format($pct, 1, '.', '')) ?>%</td>
-                    <td><?= h($savedAt) ?></td>
+                    <td><span class="badge rounded-pill text-bg-light border wm-subject-pill"><?= h((string)$r['subject_name']) ?></span></td>
+                    <td>
+                      <div class="fw-semibold"><?= h($examName) ?></div>
+                      <div class="small text-muted"><?= h($examCycle) ?> | <?= h($examDate) ?></div>
+                    </td>
+                    <td class="text-end wm-score"><?= h(number_format($score, 2, '.', '')) ?> / <?= h((string)$r['max_points']) ?></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -483,7 +557,7 @@ require_once __DIR__ . '/header.php';
               'sort' => $sort,
             ];
             $mkUrl = static function (int $p) use ($baseQ): string {
-                return '/teacher/wm_reports.php?' . http_build_query($baseQ + ['page' => $p]);
+                return '/teachers/wm_reports.php?' . http_build_query($baseQ + ['page' => $p]);
             };
           ?>
 

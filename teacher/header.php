@@ -1,10 +1,10 @@
 <?php
-// teacher/header.php — Teacher layout header (Bootstrap 5.3.8 CDN) + polished navbar + CSP nonce
+// teachers/header.php - Teacher layout header (Bootstrap 5.3.8 CDN) + polished navbar + CSP nonce
 // Guest pages: set $teacher_is_guest = true; OR $auth_required = false;
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/tauth.php';
 
 session_start_secure();
 
@@ -13,19 +13,19 @@ $auth_required     = $auth_required     ?? true;
 $show_teacher_nav  = $show_teacher_nav  ?? true;
 $teacher_is_guest  = $teacher_is_guest  ?? (!$auth_required);
 
-// -------------------- Determine current admin/teacher level (tolerant) --------------------
+// -------------------- Determine current teacher level (tolerant) --------------------
 /**
- * Robustly read admin level from various session shapes.
- * Expected meanings (per your project):
- *   Level 1 = superadmin/admin (full control)
- *   Level 2 = staff/admin (limited)
- *   Level 3 = viewer/teacher (read-only)
+ * Robustly read teacher level from various session shapes.
+ * Expected meanings:
+ *   Level 1 = Super Teacher
+ *   Level 2 = Medium Teacher
+ *   Level 3 = Teacher (read-only)
  */
-$read_admin_level = static function (): int {
+$read_teacher_level = static function (): int {
     // Prefer helper if it exists
-    if (function_exists('admin_level')) {
+    if (function_exists('teacher_level')) {
         try {
-            $lvl = (int)admin_level();
+            $lvl = (int)teacher_level();
             if ($lvl > 0) return $lvl;
         } catch (\Throwable $e) {
             // ignore; fall back to session
@@ -33,33 +33,38 @@ $read_admin_level = static function (): int {
     }
 
     // Common session patterns
+    if (isset($_SESSION['teacher']) && is_array($_SESSION['teacher']) && isset($_SESSION['teacher']['level'])) {
+        return (int)$_SESSION['teacher']['level'];
+    }
+    if (isset($_SESSION['teacher_level'])) return (int)$_SESSION['teacher_level'];
+
+    // Legacy mirrors
     if (isset($_SESSION['admin']) && is_array($_SESSION['admin']) && isset($_SESSION['admin']['level'])) {
         return (int)$_SESSION['admin']['level'];
     }
     if (isset($_SESSION['admin_level'])) return (int)$_SESSION['admin_level'];
     if (isset($_SESSION['level'])) return (int)$_SESSION['level'];
 
-    return 0;
+    return AUTH_LEVEL_TEACHER;
 };
 
-$adminLevel = $read_admin_level();
+$teacherLevel = $read_teacher_level();
 
 // -------------------- Guard only when not guest --------------------
 if (!$teacher_is_guest && $auth_required) {
     if (function_exists('require_teacher')) {
-        require_teacher(); // preferred (level 3, redirects to /teacher/login.php)
+        require_teacher(); // preferred (level 3, redirects to /teachers/login.php)
     } else {
         // Fallback (tolerant session shapes)
-        if (admin_id() <= 0) {
-            $to = (string)($_SERVER['REQUEST_URI'] ?? '/teacher/dashboard.php');
-            header('Location: /teacher/login.php?next=' . rawurlencode($to));
+        if (teacher_id() <= 0) {
+            $to = (string)($_SERVER['REQUEST_URI'] ?? '/teachers/dashboard.php');
+            header('Location: /teachers/login.php?next=' . rawurlencode($to));
             exit;
         }
 
         // Re-read in case session was set during require/auth
-        $adminLevel = $read_admin_level();
-
-        if (($adminLevel ?? 0) !== 3) {
+        $teacherLevel = $read_teacher_level();
+        if (!in_array((int)$teacherLevel, [AUTH_LEVEL_SUPERADMIN, AUTH_LEVEL_ADMIN, AUTH_LEVEL_TEACHER], true)) {
             http_response_code(403);
             echo 'Forbidden.';
             exit;
@@ -68,15 +73,15 @@ if (!$teacher_is_guest && $auth_required) {
 }
 
 // If we are not guest and logged in, normalize displayed level (should be 3 on teacher portal)
-if (!$teacher_is_guest && $auth_required && $adminLevel <= 0) {
-    $adminLevel = 3;
+if (!$teacher_is_guest && $auth_required && $teacherLevel <= 0) {
+    $teacherLevel = AUTH_LEVEL_TEACHER;
 }
 
 // -------------------- Page metadata --------------------
 $pageTitle = (isset($page_title) && is_string($page_title) && $page_title !== '') ? $page_title : 'Teacher Portal';
 $pageSubtitle = (isset($page_subtitle) && is_string($page_subtitle)) ? trim($page_subtitle) : '';
 $showPageHeader = !isset($show_page_header) || (bool)$show_page_header;
-$userLogin = admin_login();
+$userLogin = teacher_login();
 $isGuest   = (bool)$teacher_is_guest;
 
 // -------------------- Active nav helper --------------------
@@ -116,17 +121,17 @@ header('X-Frame-Options: SAMEORIGIN');
 header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 
 // -------------------- Level label helpers --------------------
-$levelLabel = match ((int)$adminLevel) {
+$levelLabel = match ((int)$teacherLevel) {
     1 => 'Level 1',
     2 => 'Level 2',
     3 => 'Level 3',
     default => 'Level -',
 };
 
-$levelRoleLabel = match ((int)$adminLevel) {
-    1 => 'Admin',
-    2 => 'Staff',
-    3 => 'Viewer',
+$levelRoleLabel = match ((int)$teacherLevel) {
+    1 => 'Super Teacher',
+    2 => 'Medium Teacher',
+    3 => 'Teacher',
     default => 'User',
 };
 
@@ -149,7 +154,7 @@ $levelRoleLabel = match ((int)$adminLevel) {
   <!-- Bootstrap Icons -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" rel="stylesheet">
 
-  <!-- Site styles (reuse admin.css if that’s your global UI) -->
+  <!-- Site styles (reuse admin.css if that's your global UI) -->
   <link href="/assets/admin.css" rel="stylesheet">
 
   <?php if ($isGuest): ?>
@@ -300,7 +305,7 @@ $levelRoleLabel = match ((int)$adminLevel) {
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm teacher-nav">
   <div class="container-fluid">
 
-    <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="/teacher/dashboard.php">
+    <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="/teachers/dashboard.php">
       <span class="brand-mark">
         <i class="bi bi-person-badge"></i>
       </span>
@@ -316,7 +321,7 @@ $levelRoleLabel = match ((int)$adminLevel) {
       <ul class="navbar-nav me-auto mb-2 mb-lg-0 gap-lg-1">
 
         <li class="nav-item">
-          <a class="nav-link<?= $active('dashboard.php') ?>" href="/teacher/dashboard.php"
+          <a class="nav-link<?= $active('dashboard.php') ?>" href="/teachers/dashboard.php"
              aria-current="<?= $current === 'dashboard.php' ? 'page' : 'false' ?>">
             <i class="bi bi-speedometer2 me-1"></i> Dashboard
           </a>
@@ -336,12 +341,12 @@ $levelRoleLabel = match ((int)$adminLevel) {
           </a>
           <ul class="dropdown-menu dropdown-menu-dark shadow-sm">
             <li>
-              <a class="dropdown-item<?= $active('class_report.php') ?>" href="/teacher/class_report.php">
+              <a class="dropdown-item<?= $active('class_report.php') ?>" href="/teachers/class_report.php">
                 <i class="bi bi-clipboard-data me-2"></i> Class reports
               </a>
             </li>
             <li>
-              <a class="dropdown-item<?= $active('class_pupils.php') ?>" href="/teacher/class_pupils.php">
+              <a class="dropdown-item<?= $active('class_pupils.php') ?>" href="/teachers/class_pupils.php">
                 <i class="bi bi-table me-2"></i> Class pupils
               </a>
             </li>
@@ -349,28 +354,35 @@ $levelRoleLabel = match ((int)$adminLevel) {
         </li>
 
         <li class="nav-item">
-          <a class="nav-link<?= $active('compare.php') ?>" href="/teacher/compare.php"
+          <a class="nav-link<?= $active('compare.php') ?>" href="/teachers/compare.php"
              aria-current="<?= $current === 'compare.php' ? 'page' : 'false' ?>">
             <i class="bi bi-bar-chart-line me-1"></i> Comparison
           </a>
         </li>
 
         <li class="nav-item">
-          <a class="nav-link<?= $active('reports.php') ?>" href="/teacher/reports.php"
+          <a class="nav-link<?= $active('reports.php') ?>" href="/teachers/reports.php"
              aria-current="<?= $current === 'reports.php' ? 'page' : 'false' ?>">
             <i class="bi bi-graph-up-arrow me-1"></i> Reports
           </a>
         </li>
 
         <li class="nav-item">
-          <a class="nav-link<?= $active('p-hisobot.php') ?>" href="/teacher/p-hisobot.php"
+          <a class="nav-link<?= $active('wm_reports.php') ?>" href="/teachers/wm_reports.php"
+             aria-current="<?= $current === 'wm_reports.php' ? 'page' : 'false' ?>">
+            <i class="bi bi-table me-1"></i> WM Reports
+          </a>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link<?= $active('p-hisobot.php') ?>" href="/teachers/p-hisobot.php"
              aria-current="<?= $current === 'p-hisobot.php' ? 'page' : 'false' ?>">
             <i class="bi bi-printer me-1"></i> Print
           </a>
         </li>
 
         <li class="nav-item">
-          <a class="nav-link<?= $active('certificates.php') ?>" href="/teacher/certificates.php"
+          <a class="nav-link<?= $active('certificates.php') ?>" href="/teachers/certificates.php"
              aria-current="<?= $current === 'certificates.php' ? 'page' : 'false' ?>">
             <i class="bi bi-patch-check me-1"></i> Certificates
           </a>
@@ -387,7 +399,7 @@ $levelRoleLabel = match ((int)$adminLevel) {
           <i class="bi bi-shield-check"></i> <?= h($levelLabel) ?>
         </span>
 
-        <a href="/teacher/logout.php" class="btn btn-outline-light btn-sm">
+        <a href="/teachers/logout.php" class="btn btn-outline-light btn-sm">
           <i class="bi bi-box-arrow-right me-1"></i> Logout
         </a>
       </div>

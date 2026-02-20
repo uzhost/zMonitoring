@@ -31,7 +31,7 @@ $active = static function (string $file) use ($current): string {
 $importPages = ['pupils_import.php', 'results_import.php', 'subjects.php'];
 $isImportActive = in_array($current, $importPages, true);
 
-$classPages = ['class_report.php', 'class_pupils.php', 'class_group.php'];
+$classPages = ['class_report.php', 'class_pupils.php', 'class_group.php', 'classes.php'];
 $isClassActive = in_array($current, $classPages, true);
 
 $pupilPages = ['pupils.php', 'pupils_result.php', 'certificates.php'];
@@ -239,6 +239,11 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
             <li>
               <a class="dropdown-item<?= $active('class_group.php') ?>" href="class_group.php">
                 <i class="bi bi-table me-2"></i> Class Groups
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('classes.php') ?>" href="classes.php">
+                <i class="bi bi-collection me-2"></i> Classes
               </a>
             </li>
           </ul>

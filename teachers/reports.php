@@ -1,10 +1,15 @@
 <?php
-// teacher/reports.php — Full analysis reports (drop-in; DECIMAL-safe; fixes HY093; CSV export; at-risk + pupil modal + subject trend modal)
+// teachers/reports.php - Full analysis reports (drop-in; DECIMAL-safe; fixes HY093; at-risk + pupil modal + subject trend modal)
 
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/_guard.php';
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/reports.php';
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 /* ----------------------------- helpers ----------------------------- */
 
@@ -208,7 +213,7 @@ if ($ajax === 'pupil_scores') {
 
     $pinnedExamId = null;
     if ($filters['exam_id']) {
-        // If the selected exam is the latest in this slice, also include the previous exam so we can show Δ.
+        // If the selected exam is the latest in this slice, also include the previous exam so we can show Delta.
         $pinnedExamId = (int)$filters['exam_id'];
 
         $pair = fetch_all($pdo, "
@@ -313,7 +318,7 @@ if ($ajax === 'subject_trend') {
     if ($filters['exam_id']) {
         $pinnedExamId = (int)$filters['exam_id'];
 
-        // If selected exam is latest in slice, include previous for Δ.
+        // If selected exam is latest in slice, include previous for Delta.
         $pair = fetch_all($pdo, "
             SELECT e.id, e.exam_date
             FROM results r
@@ -385,166 +390,6 @@ if ($ajax === 'subject_trend') {
         'rows' => $rows,
     ], JSON_UNESCAPED_UNICODE);
     exit;
-}
-
-/* ----------------------------- CSV exports (BEFORE HTML) ----------------------------- */
-
-function export_csv(PDO $pdo, string $filename, array $headers, string $sql, array $params): void
-{
-    $rows = fetch_all($pdo, $sql, $params);
-
-    header('Content-Type: text/csv; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="' . $filename . '"');
-    header('X-Content-Type-Options: nosniff');
-    echo "\xEF\xBB\xBF";
-
-    $out = fopen('php://output', 'w');
-    fputcsv($out, $headers);
-    foreach ($rows as $r) {
-        $line = [];
-        foreach ($headers as $k) $line[] = isset($r[$k]) ? (string)$r[$k] : '';
-        fputcsv($out, $line);
-    }
-    fclose($out);
-    exit;
-}
-
-$export = gs('export', 30); // subject|pupils|classes|raw
-if ($export) {
-    $stamp = date('Ymd_His');
-
-    if ($export === 'subject') {
-        export_csv(
-            $pdo,
-            "subject_summary_{$stamp}.csv",
-            ['subject_code','subject_name','n','mean','median','stdev','pass_rate'],
-            "
-            WITH base AS (
-              SELECT
-                s.id AS subject_id,
-                s.code AS subject_code,
-                s.name AS subject_name,
-                r.score AS score
-              FROM results r
-              JOIN pupils p   ON p.id = r.pupil_id
-              JOIN subjects s ON s.id = r.subject_id
-              JOIN exams e    ON e.id = r.exam_id
-              $whereSql
-            ),
-            med AS (
-              SELECT
-                subject_id,
-                AVG(score) AS median
-              FROM (
-                SELECT
-                  subject_id, score,
-                  ROW_NUMBER() OVER (PARTITION BY subject_id ORDER BY score) AS rn,
-                  COUNT(*) OVER (PARTITION BY subject_id) AS cnt
-                FROM base
-              ) t
-              WHERE rn IN (FLOOR((cnt + 1)/2), FLOOR((cnt + 2)/2))
-              GROUP BY subject_id
-            )
-            SELECT
-              b.subject_code AS subject_code,
-              b.subject_name AS subject_name,
-              COUNT(*) AS n,
-              ROUND(AVG(b.score), 2) AS mean,
-              ROUND(COALESCE(m.median, 0), 2) AS median,
-              ROUND(STDDEV_POP(b.score), 2) AS stdev,
-              ROUND(100 * AVG(b.score >= :pass), 1) AS pass_rate
-            FROM base b
-            LEFT JOIN med m ON m.subject_id = b.subject_id
-            GROUP BY b.subject_id, b.subject_code, b.subject_name, m.median
-            ORDER BY mean ASC, stdev DESC, n DESC
-            ",
-            array_merge($params, ['pass' => $passThreshold])
-        );
-    }
-
-    if ($export === 'pupils') {
-        export_csv(
-            $pdo,
-            "pupil_summary_{$stamp}.csv",
-            ['student_login','surname','name','class_code','track','n','mean','min','max','pass_rate'],
-            "
-            SELECT
-              p.student_login AS student_login,
-              p.surname AS surname,
-              p.name AS name,
-              p.class_code AS class_code,
-              p.track AS track,
-              COUNT(*) AS n,
-              ROUND(AVG(r.score), 2) AS mean,
-              ROUND(MIN(r.score), 2) AS min,
-              ROUND(MAX(r.score), 2) AS max,
-              ROUND(100 * AVG(r.score >= :pass), 1) AS pass_rate
-            FROM results r
-            JOIN pupils p   ON p.id = r.pupil_id
-            JOIN subjects s ON s.id = r.subject_id
-            JOIN exams e    ON e.id = r.exam_id
-            $whereSql
-            GROUP BY p.id, p.student_login, p.surname, p.name, p.class_code, p.track
-            ORDER BY mean DESC, n DESC
-            ",
-            array_merge($params, ['pass' => $passThreshold])
-        );
-    }
-
-    if ($export === 'classes') {
-        export_csv(
-            $pdo,
-            "class_summary_{$stamp}.csv",
-            ['class_code','track','n','mean','stdev','pass_rate'],
-            "
-            SELECT
-              p.class_code AS class_code,
-              p.track AS track,
-              COUNT(*) AS n,
-              ROUND(AVG(r.score), 2) AS mean,
-              ROUND(STDDEV_POP(r.score), 2) AS stdev,
-              ROUND(100 * AVG(r.score >= :pass), 1) AS pass_rate
-            FROM results r
-            JOIN pupils p   ON p.id = r.pupil_id
-            JOIN subjects s ON s.id = r.subject_id
-            JOIN exams e    ON e.id = r.exam_id
-            $whereSql
-            GROUP BY p.class_code, p.track
-            ORDER BY mean DESC, pass_rate DESC, n DESC
-            ",
-            array_merge($params, ['pass' => $passThreshold])
-        );
-    }
-
-    if ($export === 'raw') {
-        export_csv(
-            $pdo,
-            "raw_results_{$stamp}.csv",
-            ['academic_year','term','exam_name','exam_date','class_code','track','student_login','surname','name','subject_code','subject_name','score'],
-            "
-            SELECT
-              e.academic_year AS academic_year,
-              e.term AS term,
-              e.exam_name AS exam_name,
-              e.exam_date AS exam_date,
-              p.class_code AS class_code,
-              p.track AS track,
-              p.student_login AS student_login,
-              p.surname AS surname,
-              p.name AS name,
-              s.code AS subject_code,
-              s.name AS subject_name,
-              r.score AS score
-            FROM results r
-            JOIN pupils p   ON p.id = r.pupil_id
-            JOIN subjects s ON s.id = r.subject_id
-            JOIN exams e    ON e.id = r.exam_id
-            $whereSql
-            ORDER BY COALESCE(e.exam_date,'9999-12-31') DESC, e.id DESC, p.class_code ASC, p.surname ASC, p.name ASC, s.name ASC
-            ",
-            $params
-        );
-    }
 }
 
 /* ----------------------------- page HTML ----------------------------- */
@@ -957,7 +802,7 @@ if ($nResults > 0) {
             WHEN AVG(r.score) < :pass THEN 'Low mean'
             WHEN MIN(r.score) <= 0 THEN 'Zero score'
             WHEN (AVG(r.score >= :pass) * 100.0) < :risk_pass_pct THEN 'Low pass rate'
-            ELSE '—'
+            ELSE '-'
           END AS risk_reason
         FROM results r
         JOIN pupils p   ON p.id = r.pupil_id
@@ -1160,7 +1005,6 @@ foreach ([
           </div>
           <div class="d-flex flex-wrap gap-2">
             <a class="btn btn-sm btn-outline-secondary" href="reports.php"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset</a>
-            <a class="btn btn-sm btn-outline-primary" href="<?= eh(url_with(['export' => 'raw'])) ?>"><i class="bi bi-download me-1"></i>Export RAW</a>
           </div>
         </div>
 
@@ -1202,9 +1046,9 @@ foreach ([
               <?php foreach ($exams as $e): ?>
                 <?php
                   $eid = (int)$e['id'];
-                  $label = trim((string)$e['exam_name']) . ' — ' . (string)$e['academic_year'];
+                  $label = trim((string)$e['exam_name']) . ' - ' . (string)$e['academic_year'];
                   if (!empty($e['term'])) $label .= ' (Term ' . (int)$e['term'] . ')';
-                  if (!empty($e['exam_date'])) $label .= ' • ' . (string)$e['exam_date'];
+                  if (!empty($e['exam_date'])) $label .= ' | ' . (string)$e['exam_date'];
                 ?>
                 <option value="<?= $eid ?>" <?= ($filters['exam_id'] === $eid) ? 'selected' : '' ?>><?= eh($label) ?></option>
               <?php endforeach; ?>
@@ -1284,16 +1128,13 @@ foreach ([
               <div class="col-md-2">
                 <label class="form-label">List limit</label>
                 <input type="number" class="form-control" value="<?= (int)$listLimit ?>" disabled>
-                <div class="form-text">Class selected ⇒ 12, otherwise 24.</div>
+                <div class="form-text">Class selected =>’ 12, otherwise 24.</div>
               </div>
             </div>
           </div>
 
           <div class="col-12 d-flex flex-wrap gap-2 align-items-end mt-3">
             <button class="btn btn-primary"><i class="bi bi-search me-1"></i>Apply</button>
-            <a class="btn btn-outline-secondary" href="<?= eh(url_with(['export' => 'subject'])) ?>"><i class="bi bi-download me-1"></i>Export Subject Summary</a>
-            <a class="btn btn-outline-secondary" href="<?= eh(url_with(['export' => 'classes'])) ?>"><i class="bi bi-download me-1"></i>Export Class Summary</a>
-            <a class="btn btn-outline-secondary" href="<?= eh(url_with(['export' => 'pupils'])) ?>"><i class="bi bi-download me-1"></i>Export Pupil Summary</a>
           </div>
         </form>
 
@@ -1314,7 +1155,7 @@ foreach ([
     <div class="card shadow-sm"><div class="card-body">
       <div class="text-muted small">Results</div>
       <div class="fs-4 fw-semibold"><?= $nResults ?></div>
-      <div class="small text-muted"><?= $nPupils ?> pupils • <?= $nSubjects ?> subjects • <?= $nExams ?> exams</div>
+      <div class="small text-muted"><?= $nPupils ?> pupils | <?= $nSubjects ?> subjects | <?= $nExams ?> exams</div>
     </div></div>
   </div>
   <div class="col-md-3">
@@ -1322,13 +1163,13 @@ foreach ([
       <div class="text-muted small">Average</div>
       <?php $avgv = ($kpi['avg_score'] ?? null) !== null ? (float)$kpi['avg_score'] : null; ?>
       <div class="fs-4 fw-semibold">
-        <?php if ($avgv === null): ?>—<?php else: ?>
+        <?php if ($avgv === null): ?>-<?php else: ?>
           <span class="badge <?= eh(badge_score_bucket($avgv, $passThreshold, $goodThreshold, $excellentThreshold)) ?> metric-badge">
             <?= number_format($avgv, 2) ?>
           </span>
         <?php endif; ?>
       </div>
-      <div class="small text-muted">Min <?= eh($kpi['min_score'] ?? '—') ?> • Max <?= eh($kpi['max_score'] ?? '—') ?></div>
+      <div class="small text-muted">Min <?= eh($kpi['min_score'] ?? '-') ?> | Max <?= eh($kpi['max_score'] ?? '-') ?></div>
     </div></div>
   </div>
   <div class="col-md-3">
@@ -1336,7 +1177,7 @@ foreach ([
       <div class="text-muted small">Median</div>
       <?php $medv = !empty($median['median_score']) ? (float)$median['median_score'] : null; ?>
       <div class="fs-4 fw-semibold">
-        <?php if ($medv === null): ?>—<?php else: ?>
+        <?php if ($medv === null): ?>-<?php else: ?>
           <span class="badge <?= eh(badge_score_bucket($medv, $passThreshold, $goodThreshold, $excellentThreshold)) ?> metric-badge">
             <?= number_format($medv, 2) ?>
           </span>
@@ -1347,7 +1188,7 @@ foreach ([
   </div>
   <div class="col-md-3">
     <div class="card shadow-sm"><div class="card-body">
-      <div class="text-muted small">Pass rate (≥ <?= eh($passThreshold) ?>)</div>
+      <div class="text-muted small">Pass rate (>= <?= eh($passThreshold) ?>)</div>
       <div class="fs-4 fw-semibold">
         <span class="badge <?= eh(($passRate >= 75) ? 'text-bg-success' : (($passRate >= 50) ? 'text-bg-primary' : (($passRate >= 25) ? 'text-bg-warning text-dark' : 'text-bg-danger'))) ?> metric-badge">
           <?= pct($passRate, 1) ?>
@@ -1370,10 +1211,10 @@ foreach ([
             <?php if ($filters['exam_id']): ?>
               <span class="ms-2 badge text-bg-light border"><i class="bi bi-pin-angle me-1"></i>Single exam selected</span>
             <?php elseif ($subjectTermPair): ?>
-              <span class="ms-2 badge text-bg-light border"><i class="bi bi-arrow-left-right me-1"></i>Δ vs previous term</span>
+              <span class="ms-2 badge text-bg-light border"><i class="bi bi-arrow-left-right me-1"></i>Delta vs previous term</span>
               <span class="ms-2 badge text-bg-light border"><i class="bi bi-window-plus me-1"></i>Modal shows all terms</span>
             <?php elseif ($subjectExamPair): ?>
-              <span class="ms-2 badge text-bg-light border"><i class="bi bi-repeat me-1"></i>Δ vs previous exam</span>
+              <span class="ms-2 badge text-bg-light border"><i class="bi bi-repeat me-1"></i>Delta vs previous exam</span>
             <?php endif; ?>
           </div>
         </div>
@@ -1391,7 +1232,7 @@ foreach ([
                   <th class="text-end">Median</th>
                   <th class="text-end">StdDev</th>
                   <th class="text-end">Pass%</th>
-                  <th class="text-end">Δ (latest - prev)</th>
+                  <th class="text-end">Delta (latest - prev)</th>
                 </tr>
               </thead>
               <tbody>
@@ -1425,7 +1266,7 @@ foreach ([
                         <?= number_format($mean, 2) ?>
                       </span>
                     </td>
-                    <td class="text-end"><?= $medianS !== null ? number_format($medianS, 2) : '—' ?></td>
+                    <td class="text-end"><?= $medianS !== null ? number_format($medianS, 2) : '-' ?></td>
                     <td class="text-end"><?= number_format($stdev, 2) ?></td>
                     <td class="text-end">
                       <span class="badge <?= eh(($pr >= 75) ? 'text-bg-success' : (($pr >= 50) ? 'text-bg-primary' : (($pr >= 25) ? 'text-bg-warning text-dark' : 'text-bg-danger'))) ?> metric-badge">
@@ -1434,13 +1275,13 @@ foreach ([
                     </td>
                     <td class="text-end">
                       <?php if ($filters['exam_id'] || (!$subjectExamPair && !$subjectTermPair) || $dMeta === null): ?>
-                        <span class="text-muted">—</span>
+                        <span class="text-muted">-</span>
                       <?php else: ?>
                         <span class="badge <?= eh($dMeta['cls']) ?> metric-badge" title="Change vs previous (mean)">
                           <i class="bi <?= eh($dMeta['ic']) ?> me-1"></i><?= eh($dMeta['sign']) ?><?= number_format((float)$d, 2) ?>
                         </span>
                         <div class="small text-muted mono">
-                          <?= $dp === null ? '—' : (number_format((float)$dp, 1) . '%') ?>
+                          <?= $dp === null ? '-' : (number_format((float)$dp, 1) . '%') ?>
                         </div>
                       <?php endif; ?>
                     </td>
@@ -1480,8 +1321,8 @@ foreach ([
                   <th class="text-end">N</th>
                   <th class="text-end">Mean</th>
                   <th class="text-end">Pass%</th>
-                  <th class="text-end">Δ Mean</th>
-                  <th class="text-end">Δ Pass%</th>
+                  <th class="text-end">Delta Mean</th>
+                  <th class="text-end">Delta Pass%</th>
                 </tr>
               </thead>
               <tbody>
@@ -1527,21 +1368,21 @@ foreach ([
                       </div>
                     </td>
                     <td class="text-end">
-                      <?php if ($dmMeta === null): ?><span class="text-muted">—</span>
+                      <?php if ($dmMeta === null): ?><span class="text-muted">-</span>
                       <?php else: ?>
                         <span class="badge <?= eh($dmMeta['cls']) ?> metric-badge" title="Mean change (latest - previous)">
                           <i class="bi <?= eh($dmMeta['ic']) ?> me-1"></i><?= eh($dmMeta['sign']) ?><?= number_format((float)$dm, 2) ?>
                         </span>
-                        <div class="small text-muted mono"><?= $dmp === null ? '—' : (number_format((float)$dmp, 1) . '%') ?></div>
+                        <div class="small text-muted mono"><?= $dmp === null ? '-' : (number_format((float)$dmp, 1) . '%') ?></div>
                       <?php endif; ?>
                     </td>
                     <td class="text-end">
-                      <?php if ($dpMeta === null): ?><span class="text-muted">—</span>
+                      <?php if ($dpMeta === null): ?><span class="text-muted">-</span>
                       <?php else: ?>
                         <span class="badge <?= eh($dpMeta['cls']) ?> metric-badge" title="Pass rate change (latest - previous)">
                           <i class="bi <?= eh($dpMeta['ic']) ?> me-1"></i><?= eh($dpMeta['sign']) ?><?= number_format((float)$dpass, 1) ?>
                         </span>
-                        <div class="small text-muted mono"><?= $dpassp === null ? '—' : (number_format((float)$dpassp, 1) . '%') ?></div>
+                        <div class="small text-muted mono"><?= $dpassp === null ? '-' : (number_format((float)$dpassp, 1) . '%') ?></div>
                       <?php endif; ?>
                     </td>
                   </tr>
@@ -1567,7 +1408,7 @@ foreach ([
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
           <div class="fw-semibold">
             <i class="bi bi-trophy me-2"></i>High performers
-            <span class="badge text-bg-light border">(mean ≥ <?= eh($goodThreshold) ?>)</span>
+            <span class="badge text-bg-light border">(mean >= <?= eh($goodThreshold) ?>)</span>
           </div>
           <span class="badge text-bg-light border">
             <i class="bi bi-palette me-1"></i>Color-coded scores
@@ -1611,7 +1452,7 @@ foreach ([
                         <i class="bi bi-person-badge me-1 text-primary"></i>
                         <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
                       </div>
-                      <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
+                      <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> | <?= eh($r['track']) ?></div>
                     </td>
                     <td><?= eh($r['class_code']) ?></td>
                     <td class="text-end"><?= (int)$r['n'] ?></td>
@@ -1644,11 +1485,11 @@ foreach ([
         <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
           <div class="fw-semibold"><i class="bi bi-exclamation-triangle me-2"></i>At-risk pupils (heuristic)</div>
           <span class="badge text-bg-light border">
-            Min N: <?= (int)$riskMinN ?> • Risk Pass%: <?= eh($riskPassPct) ?>
+            Min N: <?= (int)$riskMinN ?> | Risk Pass%: <?= eh($riskPassPct) ?>
           </span>
         </div>
         <div class="small text-muted mb-2">
-          Criteria: N ≥ <?= (int)$riskMinN ?> AND (mean &lt; pass OR any 0 OR pass% &lt; <?= eh($riskPassPct) ?>).
+          Criteria: N >= <?= (int)$riskMinN ?> AND (mean &lt; pass OR any 0 OR pass% &lt; <?= eh($riskPassPct) ?>).
         </div>
 
         <?php if (!$atRisk): ?>
@@ -1690,7 +1531,7 @@ foreach ([
                           <i class="bi bi-person-exclamation me-1 text-danger"></i>
                           <?= eh($r['surname']) ?> <?= eh($r['name']) ?>
                         </div>
-                        <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> • <?= eh($r['track']) ?></div>
+                        <div class="small text-muted"><code><?= eh($r['student_login']) ?></code> | <?= eh($r['track']) ?></div>
                       </td>
                       <td><?= eh($r['class_code']) ?></td>
                       <td class="text-end"><?= (int)$r['n'] ?></td>
@@ -1706,7 +1547,7 @@ foreach ([
                         <span class="badge <?= eh($bMin) ?> metric-badge"><?= number_format($minv, 2) ?></span>
                       </td>
                       <td>
-                        <span class="badge text-bg-light border"><?= eh($r['risk_reason'] ?? '—') ?></span>
+                        <span class="badge text-bg-light border"><?= eh($r['risk_reason'] ?? '-') ?></span>
                       </td>
                     </tr>
                   <?php endforeach; ?>
@@ -1816,30 +1657,30 @@ foreach ([
           <div class="row g-2 mb-3" id="pupilKpisRow">
             <div class="col-md-3"><div class="kpi-mini">
               <div class="small text-muted">Overall mean</div>
-              <div class="v mono" id="pk_mean">—</div>
+              <div class="v mono" id="pk_mean">-</div>
               <div class="small text-muted">All rows in scope</div>
             </div></div>
             <div class="col-md-3"><div class="kpi-mini">
               <div class="small text-muted">Best subject</div>
-              <div class="v mono" id="pk_best">—</div>
-              <div class="small text-muted" id="pk_best_sub">—</div>
+              <div class="v mono" id="pk_best">-</div>
+              <div class="small text-muted" id="pk_best_sub">-</div>
             </div></div>
             <div class="col-md-3"><div class="kpi-mini">
               <div class="small text-muted">Needs support</div>
-              <div class="v mono" id="pk_worst">—</div>
-              <div class="small text-muted" id="pk_worst_sub">—</div>
+              <div class="v mono" id="pk_worst">-</div>
+              <div class="small text-muted" id="pk_worst_sub">-</div>
             </div></div>
             <div class="col-md-3"><div class="kpi-mini">
               <div class="small text-muted">Latest vs previous</div>
-              <div class="v mono" id="pk_last_delta">—</div>
-              <div class="small text-muted" id="pk_last_delta_sub">Total points (Δ pts • Δ%)</div>
+              <div class="v mono" id="pk_last_delta">-</div>
+              <div class="small text-muted" id="pk_last_delta_sub">Total points (Delta pts | Delta%)</div>
             </div></div>
           </div>
 
           <!-- Per-exam summary -->
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
             <div class="fw-semibold"><i class="bi bi-layers me-2"></i>Exam summary</div>
-            <div class="small text-muted">Totals (sum of subjects) + Δ points and Δ% vs previous exam.</div>
+            <div class="small text-muted">Totals (sum of subjects) + Delta points and Delta% vs previous exam.</div>
           </div>
           <div class="table-responsive mb-3">
             <table class="table table-sm table-striped align-middle mb-0" id="pupilExamSummaryTable">
@@ -1852,8 +1693,8 @@ foreach ([
                   <th class="text-end">Subjects</th>
                   <th class="text-end">Total</th>
                   <th class="text-end">Mean</th>
-                  <th class="text-end">Δ pts</th>
-                  <th class="text-end">Δ %</th>
+                  <th class="text-end">Delta pts</th>
+                  <th class="text-end">Delta %</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -1928,17 +1769,17 @@ foreach ([
                   <th class="text-end">N</th>
                   <th class="text-end">Mean</th>
                   <th class="text-end">Pass%</th>
-                  <th class="text-end">Δ Mean</th>
-                  <th class="text-end">Δ Pass%</th>
-                  <th class="text-end">Δ pts</th>
-                  <th class="text-end">Δ %</th>
+                  <th class="text-end">Delta Mean</th>
+                  <th class="text-end">Delta Pass%</th>
+                  <th class="text-end">Delta pts</th>
+                  <th class="text-end">Delta %</th>
                 </tr>
               </thead>
               <tbody></tbody>
             </table>
           </div>
           <div class="small text-muted mt-2">
-            Δ compares each exam to the previous one in chronological order (within the current filters).
+            Delta compares each exam to the previous one in chronological order (within the current filters).
           </div>
         </div>
       </div>
@@ -1985,12 +1826,12 @@ foreach ([
   }
   function fmt2(x){
     const n = Number(x);
-    if (!Number.isFinite(n)) return '—';
+    if (!Number.isFinite(n)) return '-';
     return n.toFixed(2);
   }
   function fmt1p(x){
     const n = Number(x);
-    if (!Number.isFinite(n)) return '—';
+    if (!Number.isFinite(n)) return '-';
     return n.toFixed(1) + '%';
   }
   function escapeHtml(s) {
@@ -2118,11 +1959,11 @@ foreach ([
     pupilSubEl.textContent = 'Loading...';
     pupilExamTbody.innerHTML = '';
     pupilScoresTbody.innerHTML = '';
-    pkMean.textContent = '—';
-    pkBest.textContent = '—'; pkBestSub.textContent = '—';
-    pkWorst.textContent = '—'; pkWorstSub.textContent = '—';
-    pkLastDelta.textContent = '—';
-    if (pkLastDeltaSub) pkLastDeltaSub.textContent = 'Total points (Δ pts • Δ%)';
+    pkMean.textContent = '-';
+    pkBest.textContent = '-'; pkBestSub.textContent = '-';
+    pkWorst.textContent = '-'; pkWorstSub.textContent = '-';
+    pkLastDelta.textContent = '-';
+    if (pkLastDeltaSub) pkLastDeltaSub.textContent = 'Total points (Delta pts | Delta%)';
     setPupilState('loading');
 
     const url = new URL(window.location.href);
@@ -2153,16 +1994,16 @@ foreach ([
         ((p.surname || '') + ' ' + (p.name || '')).trim(),
         p.student_login ? ('(' + p.student_login + ')') : '',
         p.class_code ? ('Class ' + p.class_code) : '',
-        p.track ? ('• ' + p.track) : ''
+        p.track ? ('| ' + p.track) : ''
       ].filter(Boolean).join(' ');
 
       const scopeText = [
         scope.academic_year ? ('Year ' + scope.academic_year) : null,
         scope.term ? ('Term ' + scope.term) : 'All terms',
         scope.exam_id ? ('Exam #' + scope.exam_id) : 'All exams'
-      ].filter(Boolean).join(' • ');
+      ].filter(Boolean).join(' | ');
 
-      pupilSubEl.textContent = who + ' — ' + scopeText;
+      pupilSubEl.textContent = who + ' - ' + scopeText;
 
       if (!rows.length) {
         setPupilState('error', 'No scores found for this pupil in the current scope.');
@@ -2178,11 +2019,11 @@ foreach ([
 
       if (ins.best) {
         pkBest.innerHTML = `<span class="badge ${scoreBadgeClass(ins.best.mean)} metric-badge">${fmt2(ins.best.mean)}</span>`;
-        pkBestSub.textContent = ins.best.name || '—';
+        pkBestSub.textContent = ins.best.name || '-';
       }
       if (ins.worst) {
         pkWorst.innerHTML = `<span class="badge ${scoreBadgeClass(ins.worst.mean)} metric-badge">${fmt2(ins.worst.mean)}</span>`;
-        pkWorstSub.textContent = ins.worst.name || '—';
+        pkWorstSub.textContent = ins.worst.name || '-';
       }
 
       if (ins.lastDeltaPts !== null && Number.isFinite(ins.lastDeltaPts)) {
@@ -2197,7 +2038,7 @@ foreach ([
           }
         }
         pkLastDelta.innerHTML = `<span class="badge ${m.cls} metric-badge"><i class="bi ${m.ic} me-1"></i>${m.sign}${fmt2(ins.lastDeltaPts)}</span>`;
-        if (pkLastDeltaSub) pkLastDeltaSub.textContent = (lastDeltaPct === null) ? 'Total points (Δ% —)' : ('Total points (Δ% ' + lastDeltaPct.toFixed(1) + '%)');
+        if (pkLastDeltaSub) pkLastDeltaSub.textContent = (lastDeltaPct === null) ? 'Total points (Delta% -)' : ('Total points (Delta% ' + lastDeltaPct.toFixed(1) + '%)');
       }
 
       // Exam summary table
@@ -2225,12 +2066,12 @@ foreach ([
         const tdP = document.createElement('td'); tdP.className='text-end mono';
 
         if (ex.delta_pts === null) {
-          tdD.innerHTML = '<span class="text-muted">—</span>';
-          tdP.innerHTML = '<span class="text-muted">—</span>';
+          tdD.innerHTML = '<span class="text-muted">-</span>';
+          tdP.innerHTML = '<span class="text-muted">-</span>';
         } else {
           const m = deltaMeta(ex.delta_pts);
           tdD.innerHTML = `<span class="badge ${m.cls} metric-badge"><i class="bi ${m.ic} me-1"></i>${m.sign}${fmt2(ex.delta_pts)}</span>`;
-          tdP.innerHTML = `<span class="text-muted">${ex.delta_pct === null ? '—' : (ex.delta_pct.toFixed(1) + '%')}</span>`;
+          tdP.innerHTML = `<span class="text-muted">${ex.delta_pct === null ? '-' : (ex.delta_pct.toFixed(1) + '%')}</span>`;
         }
 
         tr.append(tdExam, tdAy, tdTerm, tdDate, tdN, tdTotal, tdMean, tdD, tdP);
@@ -2334,11 +2175,11 @@ foreach ([
         scope.academic_year ? ('Year ' + scope.academic_year) : null,
         scope.term ? ('Term ' + scope.term) : 'All terms',
         scope.class_code ? ('Class ' + scope.class_code) : null,
-        scope.track ? ('• ' + scope.track) : null,
-        scope.exam_id ? ('• Exam #' + scope.exam_id) : null
+        scope.track ? ('| ' + scope.track) : null,
+        scope.exam_id ? ('| Exam #' + scope.exam_id) : null
       ].filter(Boolean).join(' ');
 
-      subjSubEl.textContent = (subj.code ? (subj.code + ' — ') : '') + (subj.name || label || '') + ' • ' + scopeText;
+      subjSubEl.textContent = (subj.code ? (subj.code + ' - ') : '') + (subj.name || label || '') + ' | ' + scopeText;
 
       if (!rows.length) {
         setSubjectState('error', 'No rows for this subject in the current scope.');
@@ -2375,12 +2216,12 @@ foreach ([
         const tdP = document.createElement('td'); tdP.className='text-end mono';
 
         if (delta === null) {
-          tdD.innerHTML = '<span class="text-muted">—</span>';
-          tdP.innerHTML = '<span class="text-muted">—</span>';
+          tdD.innerHTML = '<span class="text-muted">-</span>';
+          tdP.innerHTML = '<span class="text-muted">-</span>';
         } else {
           const m = deltaMeta(delta);
           tdD.innerHTML = `<span class="badge ${m.cls} metric-badge"><i class="bi ${m.ic} me-1"></i>${m.sign}${fmt2(delta)}</span>`;
-          tdP.innerHTML = `<span class="text-muted">${deltaPct === null ? '—' : (deltaPct.toFixed(1) + '%')}</span>`;
+          tdP.innerHTML = `<span class="text-muted">${deltaPct === null ? '-' : (deltaPct.toFixed(1) + '%')}</span>`;
         }
 
         tr.append(tdExam, tdAy, tdTerm, tdDate, tdN, tdMean, tdPass, tdD, tdP);

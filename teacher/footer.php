@@ -20,7 +20,7 @@ $appVersion = defined('APP_VERSION') ? (string)APP_VERSION : '';
       <div class="d-flex align-items-center gap-2">
         <span>© <?= htmlspecialchars((string)$year, ENT_QUOTES, 'UTF-8') ?> <?= htmlspecialchars($appName, ENT_QUOTES, 'UTF-8') ?></span>
         <span class="d-none d-md-inline">•</span>
-        <span class="text-muted">Internal Admin Panel</span>
+        <span class="text-muted">Teacher Panel</span>
         <?php if ($appVersion !== ''): ?>
           <span class="d-none d-md-inline">•</span>
           <span class="badge text-bg-light border">v<?= htmlspecialchars($appVersion, ENT_QUOTES, 'UTF-8') ?></span>

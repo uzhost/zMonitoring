@@ -74,6 +74,8 @@ if (!$teacher_is_guest && $auth_required && $adminLevel <= 0) {
 
 // -------------------- Page metadata --------------------
 $pageTitle = (isset($page_title) && is_string($page_title) && $page_title !== '') ? $page_title : 'Teacher Portal';
+$pageSubtitle = (isset($page_subtitle) && is_string($page_subtitle)) ? trim($page_subtitle) : '';
+$showPageHeader = !isset($show_page_header) || (bool)$show_page_header;
 $userLogin = admin_login();
 $isGuest   = (bool)$teacher_is_guest;
 
@@ -118,7 +120,7 @@ $levelLabel = match ((int)$adminLevel) {
     1 => 'Level 1',
     2 => 'Level 2',
     3 => 'Level 3',
-    default => 'Level —',
+    default => 'Level -',
 };
 
 $levelRoleLabel = match ((int)$adminLevel) {
@@ -168,19 +170,34 @@ $levelRoleLabel = match ((int)$adminLevel) {
     </style>
   <?php else: ?>
     <style nonce="<?= h($cspNonce) ?>">
-      /* Navbar polish */
-      .navbar{
-        border-bottom: 1px solid rgba(255,255,255,.08);
+      body.bg-light{
+        background:
+          radial-gradient(1200px 520px at 12% -8%, rgba(59,130,246,.09), transparent 60%),
+          radial-gradient(1000px 560px at 105% 110%, rgba(16,185,129,.08), transparent 65%),
+          #f4f7fb !important;
       }
-      .navbar .nav-link{
+      /* Navbar polish */
+      .teacher-nav{
+        border-bottom: 1px solid rgba(125,211,252,.28);
+        background:
+          linear-gradient(100deg, #0b3a53 0%, #0f766e 52%, #1d4ed8 100%) !important;
+        box-shadow: 0 8px 18px rgba(2,6,23,.24);
+        position: sticky;
+        top: 0;
+        z-index: 1030;
+        backdrop-filter: blur(6px);
+      }
+      .teacher-nav .nav-link{
         border-radius: .70rem;
         padding: .56rem .78rem;
+        border: 1px solid transparent;
       }
-      .navbar .nav-link.active{
-        background: rgba(255,255,255,.12);
+      .teacher-nav .nav-link.active{
+        background: rgba(186,230,253,.18);
+        border-color: rgba(186,230,253,.35);
       }
-      .navbar .nav-link:hover{
-        background: rgba(255,255,255,.08);
+      .teacher-nav .nav-link:hover{
+        background: rgba(255,255,255,.14);
       }
       .dropdown-menu{
         border-radius: .95rem;
@@ -213,20 +230,62 @@ $levelRoleLabel = match ((int)$adminLevel) {
         padding:.35rem .6rem;
         border-radius: 999px;
         border: 1px solid rgba(255,255,255,.18);
-        background: rgba(255,255,255,.08);
+        background: rgba(255,255,255,.14);
       }
       .user-chip i{ opacity:.9; }
-      .level-pill{
+      .nav-level-chip{
         display:inline-flex;
         align-items:center;
         gap:.35rem;
-        padding:.25rem .55rem;
+        padding:.34rem .62rem;
         border-radius: 999px;
-        border: 1px solid rgba(255,255,255,.18);
-        background: rgba(255,255,255,.08);
+        border: 1px solid rgba(255,255,255,.36);
+        background: rgba(255,255,255,.88);
+        color: #0f172a;
         font-size: .78rem;
+        font-weight: 700;
         line-height: 1;
-        white-space: nowrap;
+      }
+      .brand-mark{
+        width:34px;
+        height:34px;
+        display:inline-flex;
+        align-items:center;
+        justify-content:center;
+        border-radius:.6rem;
+        background:rgba(13,110,253,.22);
+        border:1px solid rgba(255,255,255,.12);
+      }
+      .page-head{
+        background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.82));
+        border: 1px solid rgba(15,23,42,.08);
+        border-radius: .9rem;
+        padding: .8rem .95rem;
+      }
+      .page-title{
+        font-size: 1.25rem;
+        font-weight: 700;
+        letter-spacing: .01em;
+        color: #0f172a;
+      }
+      .page-subtitle{
+        font-size: .86rem;
+        color: rgba(51,65,85,.78);
+      }
+      .page-actions{
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+      }
+      .flash-stack .alert{
+        border-radius: .75rem;
+        border: 1px solid rgba(148,163,184,.32);
+        margin-bottom: .6rem;
+      }
+      .flash-icon{
+        width: 1.25rem;
+        text-align: center;
+        margin-top: .1rem;
       }
     </style>
   <?php endif; ?>
@@ -238,20 +297,14 @@ $levelRoleLabel = match ((int)$adminLevel) {
 </a>
 
 <?php if ($show_teacher_nav && !$isGuest): ?>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm teacher-nav">
   <div class="container-fluid">
 
     <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="/teacher/dashboard.php">
-      <span class="d-inline-flex align-items-center justify-content-center rounded-3"
-            style="width:34px;height:34px;background:rgba(13,110,253,.22);border:1px solid rgba(255,255,255,.12);">
+      <span class="brand-mark">
         <i class="bi bi-person-badge"></i>
       </span>
       <span>Teacher Portal</span>
-
-      <!-- FIX: show REAL level, and do not hide on small screens -->
-      <span class="level-pill ms-1" title="<?= h($levelRoleLabel) ?>">
-        <i class="bi bi-shield-lock"></i> <?= h($levelLabel) ?>
-      </span>
     </a>
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#teacherNav"
@@ -269,7 +322,7 @@ $levelRoleLabel = match ((int)$adminLevel) {
           </a>
         </li>
 
-        <!-- FIX: valid markup inside <ul> -->
+        <!-- Visual divider -->
         <li class="nav-item d-none d-lg-flex align-items-stretch" aria-hidden="true">
           <span class="nav-divider"></span>
         </li>
@@ -309,16 +362,30 @@ $levelRoleLabel = match ((int)$adminLevel) {
           </a>
         </li>
 
+        <li class="nav-item">
+          <a class="nav-link<?= $active('p-hisobot.php') ?>" href="/teacher/p-hisobot.php"
+             aria-current="<?= $current === 'p-hisobot.php' ? 'page' : 'false' ?>">
+            <i class="bi bi-printer me-1"></i> Print
+          </a>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link<?= $active('certificates.php') ?>" href="/teacher/certificates.php"
+             aria-current="<?= $current === 'certificates.php' ? 'page' : 'false' ?>">
+            <i class="bi bi-patch-check me-1"></i> Certificates
+          </a>
+        </li>
+
       </ul>
 
       <div class="d-flex align-items-center gap-2">
         <div class="user-chip text-light small d-none d-lg-inline-flex" title="Signed in user">
           <i class="bi bi-person-circle"></i>
           <span class="text-truncate" style="max-width: 220px;"><?= h($userLogin !== '' ? $userLogin : 'Teacher') ?></span>
-          <span class="badge text-bg-light text-dark ms-1" title="<?= h($levelRoleLabel) ?>">
-            <?= h($levelLabel) ?>
-          </span>
         </div>
+        <span class="nav-level-chip d-none d-lg-inline-flex" title="<?= h($levelRoleLabel) ?>">
+          <i class="bi bi-shield-check"></i> <?= h($levelLabel) ?>
+        </span>
 
         <a href="/teacher/logout.php" class="btn btn-outline-light btn-sm">
           <i class="bi bi-box-arrow-right me-1"></i> Logout
@@ -331,22 +398,17 @@ $levelRoleLabel = match ((int)$adminLevel) {
 
 <main id="mainContent" class="<?= $isGuest ? 'container' : 'container-fluid' ?> py-4">
 
-<?php if (!$isGuest): ?>
-  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-    <div class="d-flex align-items-center gap-2">
-      <h1 class="h4 mb-0"><?= h($pageTitle) ?></h1>
-
-      <!-- FIX: show role + level clearly in the page header -->
-      <span class="badge text-bg-secondary-subtle border text-secondary-emphasis" title="<?= h($levelRoleLabel) ?>">
-        <i class="bi bi-eye me-1"></i> <?= h($levelRoleLabel) ?>
-      </span>
-      <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">
-        <i class="bi bi-shield-check me-1"></i> <?= h($levelLabel) ?>
-      </span>
+<?php if (!$isGuest && $showPageHeader): ?>
+  <div class="page-head d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
+    <div>
+      <div class="page-title"><?= h($pageTitle) ?></div>
+      <?php if ($pageSubtitle !== ''): ?>
+        <div class="page-subtitle mt-1"><?= h($pageSubtitle) ?></div>
+      <?php endif; ?>
     </div>
 
     <?php if (!empty($page_actions) && is_string($page_actions)): ?>
-      <div class="d-flex gap-2">
+      <div class="page-actions">
         <?= $page_actions /* trusted HTML */ ?>
       </div>
     <?php endif; ?>
@@ -354,10 +416,18 @@ $levelRoleLabel = match ((int)$adminLevel) {
 <?php endif; ?>
 
 <?php if ($flashes): ?>
-  <div class="mb-3">
+  <div class="mb-3 flash-stack">
     <?php foreach ($flashes as $f): ?>
+      <?php
+        $flashIcon = match ((string)$f['type']) {
+            'success' => 'bi-check-circle-fill',
+            'danger' => 'bi-x-octagon-fill',
+            'warning' => 'bi-exclamation-triangle-fill',
+            default => 'bi-info-circle-fill',
+        };
+      ?>
       <div class="alert alert-<?= h($f['type']) ?> d-flex align-items-start gap-2" role="alert">
-        <i class="bi bi-info-circle"></i>
+        <i class="bi <?= h($flashIcon) ?> flash-icon"></i>
         <div><?= h($f['msg']) ?></div>
       </div>
     <?php endforeach; ?>

@@ -1,10 +1,10 @@
 <?php
-// teacher/logout.php — Teacher logout (CSRF protected, safe redirects)
+// teachers/logout.php - Teacher logout (CSRF protected, safe redirects)
 // Drop-in fix: GET shows confirmation; POST performs logout; optional tokenized GET supported.
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/tauth.php';
 
 session_start_secure();
 
@@ -14,7 +14,7 @@ header('X-Frame-Options: DENY');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 
-function safe_next_path(string $candidate, string $fallback = '/teacher/login.php'): string
+function safe_next_path(string $candidate, string $fallback = '/teachers/login.php'): string
 {
     $candidate = trim($candidate);
     if ($candidate === '') return $fallback;
@@ -26,7 +26,7 @@ function safe_next_path(string $candidate, string $fallback = '/teacher/login.ph
     if ($path === '' || $path[0] !== '/') return $fallback;
 
     // Avoid redirect loops back into logout
-    if (preg_match('#^/teacher/logout\.php(?:$|[/?#])#', $path)) {
+    if (preg_match('#^/teachers/logout\.php(?:$|[/?#])#', $path)) {
         return $fallback;
     }
 
@@ -47,7 +47,7 @@ function html(string $s): string
 }
 
 // Default redirect target after logout (or if already logged out)
-$next = safe_next_path((string)($_GET['next'] ?? ''), '/teacher/login.php');
+$next = safe_next_path((string)($_GET['next'] ?? ''), '/teachers/login.php');
 
 $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 
@@ -56,7 +56,7 @@ if ($method === 'POST') {
     // Your auth.php verify_csrf('csrf') should validate and exit on failure.
     verify_csrf('csrf');
 
-    admin_logout_session();
+    teacher_logout_session();
 
     // If logout cleared session fully, ensure a new CSRF token exists for next page load.
     if (!isset($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token']) || $_SESSION['csrf_token'] === '') {
@@ -76,7 +76,7 @@ if ($method === 'GET' || $method === 'HEAD') {
 
     // If a valid token is present, allow one-click logout (still CSRF-protected)
     if ($csrf !== '' && $sess !== '' && hash_equals($sess, $csrf)) {
-        admin_logout_session();
+        teacher_logout_session();
 
         if (!isset($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token']) || $_SESSION['csrf_token'] === '') {
             $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -93,7 +93,7 @@ if ($method === 'GET' || $method === 'HEAD') {
     header('Content-Type: text/html; charset=utf-8');
 
     // Minimal, dependency-free HTML to avoid relying on teacher header/footer for logout.
-    // If you prefer to use teacher/header.php, tell me and I’ll align it.
+    // If you prefer to use teacher/header.php, tell me and IРІР‚в„ўll align it.
     $nextHidden = html($next);
     $tokenHidden = html($token);
 
@@ -116,7 +116,7 @@ if ($method === 'GET' || $method === 'HEAD') {
     echo '<div class="card">';
     echo '<div class="hd"><h2 style="margin:0">Confirm logout</h2><div class="muted">For security, please confirm to sign out.</div></div>';
     echo '<div class="bd">';
-    echo '<form method="post" action="/teacher/logout.php?next=' . rawurlencode($next) . '">';
+    echo '<form method="post" action="/teachers/logout.php?next=' . rawurlencode($next) . '">';
     echo '<input type="hidden" name="csrf" value="' . $tokenHidden . '">';
     echo '<div class="row">';
     echo '<button class="btn btn-primary" type="submit">Logout</button>';

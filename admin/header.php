@@ -31,6 +31,9 @@ $active = static function (string $file) use ($current): string {
 $importPages = ['pupils_import.php', 'results_import.php', 'subjects.php'];
 $isImportActive = in_array($current, $importPages, true);
 
+$weeklyPages = ['wm_subjects.php', 'wm_exams.php', 'wm_results.php', 'wm_reports.php'];
+$isWeeklyActive = in_array($current, $weeklyPages, true);
+
 $classPages = ['class_report.php', 'class_pupils.php', 'class_group.php', 'classes.php'];
 $isClassActive = in_array($current, $classPages, true);
 
@@ -103,40 +106,121 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 
   <?php if (!$isGuest): ?>
     <style nonce="<?= htmlspecialchars($cspNonce, ENT_QUOTES, 'UTF-8') ?>">
-      /* Navbar polish (scoped and safe) */
-      .navbar{
-        border-bottom: 1px solid rgba(255,255,255,.08);
+      :root{
+        --admin-ink: #0f172a;
+        --admin-nav-a: #0b2942;
+        --admin-nav-b: #0f4c81;
+        --admin-nav-c: #0b6e6e;
       }
-      .navbar .nav-link{
+      body.bg-light{
+        background:
+          radial-gradient(1200px 460px at 0% 0%, rgba(13,110,253,.09), transparent 60%),
+          radial-gradient(1100px 460px at 100% 100%, rgba(13,148,136,.08), transparent 65%),
+          #f3f6fb !important;
+      }
+      .admin-nav{
+        background: linear-gradient(105deg, var(--admin-nav-a) 0%, var(--admin-nav-b) 55%, var(--admin-nav-c) 100%) !important;
+        border-bottom: 1px solid rgba(255,255,255,.16);
+        box-shadow: 0 10px 22px rgba(2, 6, 23, .30);
+      }
+      .admin-nav .navbar-brand{
+        color: #fff;
+      }
+      .brand-mark{
+        width: 1.95rem;
+        height: 1.95rem;
+        border-radius: .52rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255,255,255,.16);
+        border: 1px solid rgba(255,255,255,.28);
+      }
+      .admin-nav .nav-link{
+        color: rgba(248,250,252,.96);
         border-radius: .65rem;
-        padding: .55rem .75rem;
+        padding: .56rem .8rem;
+        border: 1px solid transparent;
       }
-      .navbar .nav-link.active{
-        background: rgba(255,255,255,.12);
+      .admin-nav .nav-link.active{
+        background: rgba(255,255,255,.22);
+        border-color: rgba(255,255,255,.34);
+        color: #fff;
       }
-      .navbar .nav-link:hover{
-        background: rgba(255,255,255,.08);
+      .admin-nav .nav-link:hover{
+        background: rgba(255,255,255,.16);
+        color: #fff;
       }
       .dropdown-menu{
         border-radius: .9rem;
         overflow: hidden;
       }
       .dropdown-menu-dark{
-        border: 1px solid rgba(255,255,255,.08);
+        border: 1px solid rgba(148,163,184,.28);
+        background: #0f172a;
+        box-shadow: 0 14px 30px rgba(2,6,23,.35);
       }
       .dropdown-item{
         padding: .55rem .9rem;
+        color: #e2e8f0;
+      }
+      .dropdown-item:hover{
+        background: rgba(37, 99, 235, .28);
+        color: #fff;
       }
       .dropdown-item.active,
       .dropdown-item:active{
-        background: rgba(13,110,253,.25);
+        background: rgba(13,110,253,.42);
+        color: #fff;
       }
       .nav-divider{
         width: 1px;
-        background: rgba(255,255,255,.12);
+        background: rgba(255,255,255,.24);
         margin: .55rem .6rem;
         align-self: stretch;
         display: none;
+      }
+      .user-chip{
+        display:inline-flex;
+        align-items:center;
+        gap:.45rem;
+        padding:.36rem .62rem;
+        border-radius:999px;
+        border: 1px solid rgba(255,255,255,.28);
+        background: rgba(255,255,255,.14);
+      }
+      .btn-admin-logout{
+        border-color: rgba(255,255,255,.58);
+        color: #fff;
+      }
+      .btn-admin-logout:hover{
+        background:#fff;
+        color:#0f2942;
+        border-color:#fff;
+      }
+      .page-head{
+        border: 1px solid rgba(15, 23, 42, .10);
+        border-radius: .9rem;
+        padding: .72rem .92rem;
+        background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.84));
+        box-shadow: 0 8px 20px rgba(2, 6, 23, .06);
+      }
+      .page-title{
+        color: var(--admin-ink);
+        font-weight: 800;
+        letter-spacing: .01em;
+      }
+      .panel-chip{
+        border: 1px solid rgba(37,99,235,.30);
+        background: rgba(37,99,235,.10);
+        color: #1d4ed8;
+      }
+      .alert{
+        border-radius: .75rem;
+      }
+      a:focus-visible, button:focus-visible{
+        outline: 3px solid rgba(59,130,246,.42);
+        outline-offset: 2px;
       }
       @media (min-width: 992px){
         .nav-divider{ display:block; }
@@ -151,10 +235,10 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 </a>
 
 <?php if ($show_admin_nav && !$isGuest): ?>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+<nav class="navbar navbar-expand-lg navbar-dark admin-nav">
   <div class="container-fluid">
     <a class="navbar-brand fw-semibold d-flex align-items-center gap-2" href="dashboard.php">
-      <i class="bi bi-mortarboard"></i>
+      <span class="brand-mark"><i class="bi bi-mortarboard"></i></span>
       <span>Exam Analytics</span>
     </a>
 
@@ -210,6 +294,31 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
                 <i class="bi bi-book me-2"></i> Subjects
               </a>
             </li>
+          </ul>
+        </li>
+
+        <!-- Class dropdown (dark + consistent) -->
+        <li class="nav-item dropdown">
+          <a
+            class="nav-link dropdown-toggle<?= $isWeeklyActive ? ' active' : '' ?>"
+            href="#"
+            role="button"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+            aria-current="<?= $isWeeklyActive ? 'page' : 'false' ?>"
+          >
+            <i class="bi bi-calendar-week me-1"></i> Weekly
+          </a>
+          <ul class="dropdown-menu dropdown-menu-dark shadow-sm">
+            <li>
+              <a class="dropdown-item<?= $active('wm_subjects.php') ?>" href="wm_subjects.php">
+                <i class="bi bi-calculator me-2"></i> WM Subjects
+              </a>
+            </li>
+            <li><hr class="dropdown-divider"></li>
+            <li><span class="dropdown-item-text text-light small opacity-75">WM Exams (coming soon)</span></li>
+            <li><span class="dropdown-item-text text-light small opacity-75">WM Results (coming soon)</span></li>
+            <li><span class="dropdown-item-text text-light small opacity-75">WM Reports (coming soon)</span></li>
           </ul>
         </li>
 
@@ -291,14 +400,14 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
       </ul>
 
       <div class="d-flex align-items-center gap-2">
-        <div class="d-none d-lg-flex align-items-center text-light small">
+        <div class="d-none d-lg-flex align-items-center text-light small user-chip">
           <i class="bi bi-person-circle me-2"></i>
           <span class="text-truncate" style="max-width: 220px;">
             <?= htmlspecialchars($adminLogin !== '' ? $adminLogin : 'Admin', ENT_QUOTES, 'UTF-8') ?>
           </span>
         </div>
 
-        <a href="logout.php" class="btn btn-outline-light btn-sm">
+        <a href="logout.php" class="btn btn-outline-light btn-sm btn-admin-logout">
           <i class="bi bi-box-arrow-right me-1"></i> Logout
         </a>
       </div>
@@ -310,10 +419,10 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 <main id="mainContent" class="<?= $isGuest ? 'container' : 'container-fluid' ?> py-4">
 
 <?php if (!$isGuest): ?>
-  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 page-head">
     <div class="d-flex align-items-center gap-2">
-      <h1 class="h4 mb-0"><?= htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8') ?></h1>
-      <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">
+      <h1 class="h4 mb-0 page-title"><?= htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8') ?></h1>
+      <span class="badge panel-chip">
         <i class="bi bi-shield-lock me-1"></i> Admin
       </span>
     </div>

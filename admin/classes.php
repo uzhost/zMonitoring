@@ -458,6 +458,8 @@ $stats['linkable_pupils'] = (int)($pdo->query("
     WHERE p.class_id IS NULL OR p.class_id <> c.id
 ")->fetchColumn() ?: 0);
 
+$linkableCardClass = $stats['linkable_pupils'] > 0 ? 'kpi-card--warn' : 'kpi-card--ok';
+
 require __DIR__ . '/header.php';
 ?>
 
@@ -481,36 +483,128 @@ require __DIR__ . '/header.php';
     margin-bottom: 0;
   }
   .kpi-card {
+    position: relative;
+    overflow: hidden;
+    --kpi-accent: #0d6efd;
+    --kpi-soft: rgba(13, 110, 253, .10);
+    --kpi-soft-2: rgba(13, 110, 253, .03);
     border: 1px solid rgba(15, 23, 42, .08);
     border-radius: .95rem;
     box-shadow: 0 8px 18px rgba(2, 6, 23, .06);
+    background:
+      radial-gradient(520px 190px at 105% -30%, var(--kpi-soft), transparent 60%),
+      radial-gradient(420px 160px at -10% 120%, var(--kpi-soft-2), transparent 62%),
+      #fff;
+    transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  }
+  .kpi-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 24px rgba(2, 6, 23, .10);
+    border-color: rgba(13, 110, 253, .24);
+  }
+  .kpi-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, var(--kpi-accent), transparent);
   }
   .kpi-card .kpi-label {
-    color: #64748b;
-    font-size: .88rem;
+    color: #5f6f8a;
+    font-size: .86rem;
+    letter-spacing: .01em;
+    font-weight: 600;
   }
   .kpi-card .kpi-value {
-    font-size: 2rem;
+    font-size: 2.3rem;
     line-height: 1.1;
-    font-weight: 700;
+    font-weight: 800;
     color: #0f172a;
+    letter-spacing: .01em;
+    font-variant-numeric: tabular-nums;
   }
   .kpi-icon {
-    width: 2.2rem;
-    height: 2.2rem;
-    border-radius: .65rem;
+    width: 2.7rem;
+    height: 2.7rem;
+    border-radius: .8rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: rgba(13,110,253,.12);
-    color: #0d6efd;
+    background: var(--kpi-soft);
+    color: var(--kpi-accent);
+    border: 1px solid rgba(255,255,255,.65);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.5);
+  }
+  .kpi-card .kpi-note {
+    margin-top: .15rem;
+    text-align: center;
+    color: #7a879b;
+    font-size: .74rem;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+  }
+  .kpi-card--classes {
+    --kpi-accent: #0d6efd;
+    --kpi-soft: rgba(13, 110, 253, .14);
+    --kpi-soft-2: rgba(13, 110, 253, .05);
+  }
+  .kpi-card--active {
+    --kpi-accent: #198754;
+    --kpi-soft: rgba(25, 135, 84, .14);
+    --kpi-soft-2: rgba(25, 135, 84, .05);
+  }
+  .kpi-card--linked {
+    --kpi-accent: #0dcaf0;
+    --kpi-soft: rgba(13, 202, 240, .16);
+    --kpi-soft-2: rgba(13, 202, 240, .06);
+  }
+  .kpi-card--ok {
+    --kpi-accent: #198754;
+    --kpi-soft: rgba(25, 135, 84, .14);
+    --kpi-soft-2: rgba(25, 135, 84, .05);
+  }
+  .kpi-card--warn {
+    --kpi-accent: #fd7e14;
+    --kpi-soft: rgba(253, 126, 20, .16);
+    --kpi-soft-2: rgba(253, 126, 20, .06);
   }
   .classes-table .code-pill {
     font-weight: 600;
     letter-spacing: .01em;
+    padding: .42rem .68rem;
+    border-radius: .55rem;
   }
   .classes-table thead th {
     font-weight: 700;
+    text-align: center;
+    vertical-align: middle;
+    border-bottom: 1px solid rgba(15,23,42,.10);
+    padding: .82rem .7rem;
+    background: #f8fafc;
+  }
+  .classes-table tbody td {
+    text-align: center;
+    vertical-align: middle;
+    padding: .8rem .72rem;
+  }
+  .classes-table tbody tr {
+    transition: background-color .15s ease;
+  }
+  .classes-table tbody tr:hover {
+    background: rgba(13,110,253,.045);
+  }
+  .classes-table .status-pill {
+    min-width: 70px;
+    display: inline-flex;
+    justify-content: center;
+  }
+  .classes-table .actions-cell .btn-group {
+    justify-content: center;
+  }
+  .classes-table .actions-cell .btn {
+    min-width: 86px;
   }
 </style>
 
@@ -554,46 +648,50 @@ require __DIR__ . '/header.php';
 
 <div class="row g-3 mb-3">
   <div class="col-md-3">
-    <div class="card kpi-card h-100">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
+    <div class="card kpi-card kpi-card--classes h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
           <div class="kpi-label">Total classes</div>
-          <div class="kpi-value"><?= (int)$stats['total_classes'] ?></div>
+          <span class="kpi-icon"><i class="bi bi-collection"></i></span>
         </div>
-        <span class="kpi-icon"><i class="bi bi-collection"></i></span>
+        <div class="kpi-value text-center"><?= (int)$stats['total_classes'] ?></div>
+        <div class="kpi-note">Registry Size</div>
       </div>
     </div>
   </div>
   <div class="col-md-3">
-    <div class="card kpi-card h-100">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
+    <div class="card kpi-card kpi-card--active h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
           <div class="kpi-label">Active classes</div>
-          <div class="kpi-value"><?= (int)$stats['active_classes'] ?></div>
+          <span class="kpi-icon"><i class="bi bi-check2-circle"></i></span>
         </div>
-        <span class="kpi-icon"><i class="bi bi-check2-circle"></i></span>
+        <div class="kpi-value text-center"><?= (int)$stats['active_classes'] ?></div>
+        <div class="kpi-note">Ready for Use</div>
       </div>
     </div>
   </div>
   <div class="col-md-3">
-    <div class="card kpi-card h-100">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
+    <div class="card kpi-card kpi-card--linked h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
           <div class="kpi-label">Pupils with class_id</div>
-          <div class="kpi-value"><?= (int)$stats['linked_pupils'] ?></div>
+          <span class="kpi-icon"><i class="bi bi-link-45deg"></i></span>
         </div>
-        <span class="kpi-icon"><i class="bi bi-link-45deg"></i></span>
+        <div class="kpi-value text-center"><?= (int)$stats['linked_pupils'] ?></div>
+        <div class="kpi-note">Mapped Records</div>
       </div>
     </div>
   </div>
   <div class="col-md-3">
-    <div class="card kpi-card h-100">
-      <div class="card-body d-flex justify-content-between align-items-center">
-        <div>
+    <div class="card kpi-card <?= h($linkableCardClass) ?> h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
           <div class="kpi-label">Linkable by class_code</div>
-          <div class="kpi-value"><?= (int)$stats['linkable_pupils'] ?></div>
+          <span class="kpi-icon"><i class="bi bi-arrow-left-right"></i></span>
         </div>
-        <span class="kpi-icon"><i class="bi bi-arrow-left-right"></i></span>
+        <div class="kpi-value text-center"><?= (int)$stats['linkable_pupils'] ?></div>
+        <div class="kpi-note"><?= $stats['linkable_pupils'] > 0 ? 'Needs Sync' : 'All Synced' ?></div>
       </div>
     </div>
   </div>
@@ -642,9 +740,9 @@ require __DIR__ . '/header.php';
             <th style="width:100px;">Grade</th>
             <th style="width:100px;">Section</th>
             <th style="width:120px;">Status</th>
-            <th style="width:140px;" class="text-end">Linked</th>
-            <th style="width:160px;" class="text-end">By code</th>
-            <th style="width:220px;" class="text-end">Actions</th>
+            <th style="width:140px;">Linked</th>
+            <th style="width:160px;">By code</th>
+            <th style="width:220px;">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -672,19 +770,19 @@ require __DIR__ . '/header.php';
               <td><?= $section !== '' ? h($section) : '<span class="text-muted">-</span>' ?></td>
               <td>
                 <?php if ($isActiveRow): ?>
-                  <span class="badge text-bg-success">Active</span>
+                  <span class="badge text-bg-success status-pill">Active</span>
                 <?php else: ?>
-                  <span class="badge text-bg-secondary">Inactive</span>
+                  <span class="badge text-bg-secondary status-pill">Inactive</span>
                 <?php endif; ?>
               </td>
-              <td class="text-end fw-semibold"><?= $linkedPupils ?></td>
-              <td class="text-end">
+              <td class="fw-semibold"><?= $linkedPupils ?></td>
+              <td>
                 <?= $codePupils ?>
                 <?php if ($codePupils !== $linkedPupils): ?>
                   <span class="badge text-bg-warning ms-1">Mismatch</span>
                 <?php endif; ?>
               </td>
-              <td class="text-end">
+              <td class="actions-cell">
                 <?php if ($canWrite): ?>
                   <div class="btn-group btn-group-sm" role="group">
                     <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#<?= h($editModalId) ?>">
@@ -873,7 +971,7 @@ require __DIR__ . '/header.php';
               <label class="form-check-label" for="create_active">Active</label>
             </div>
             <div class="form-check mt-1">
-              <input class="form-check-input" type="checkbox" name="link_existing" value="1" id="create_link_existing" checked>
+              <input class="form-check-input" type="checkbox" name="link_existing" value="1" id="create_link_existing">
               <label class="form-check-label" for="create_link_existing">Link existing pupils by class_code</label>
             </div>
           </div>

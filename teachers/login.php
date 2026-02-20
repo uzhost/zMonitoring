@@ -5,7 +5,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/tauth.php';
 
 session_start_secure();
 
@@ -51,7 +51,7 @@ function teachers_ref_code(string $prefix = 'TLOGIN'): string
 
 $next = teachers_safe_next_path((string)($_POST['next'] ?? ($_GET['next'] ?? '')), '/teachers/dashboard.php');
 
-if (admin_id() > 0) {
+if (teacher_id() > 0 || admin_id() > 0) {
     header('Location: ' . $next);
     exit;
 }
@@ -88,7 +88,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         } else {
             try {
                 $st = $pdo->prepare("
-                    SELECT id, login, password_hash, is_active, full_name, short_name, class_id, failed_attempts, last_failed_at
+                    SELECT id, login, password_hash, is_active, level, full_name, short_name, class_id, failed_attempts, last_failed_at
                     FROM teachers
                     WHERE login = :login
                     LIMIT 1
@@ -139,15 +139,17 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                         ':id' => (int)$row['id'],
                     ]);
 
-                    // Keep compatibility with existing auth/guards while using teachers table as source.
-                    admin_login_session((int)$row['id'], 'viewer', (string)$row['login'], 3);
-                    $_SESSION['teacher'] = [
-                        'id' => (int)$row['id'],
-                        'login' => (string)$row['login'],
-                        'full_name' => (string)($row['full_name'] ?? ''),
-                        'short_name' => (string)($row['short_name'] ?? ''),
-                        'class_id' => (string)($row['class_id'] ?? ''),
-                    ];
+                    // Teacher-native session bootstrap (with optional admin mirror for compatibility).
+                    $teacherLevel = (int)($row['level'] ?? AUTH_LEVEL_TEACHER);
+                    teacher_login_session(
+                        (int)$row['id'],
+                        (string)$row['login'],
+                        $teacherLevel,
+                        isset($row['class_id']) ? (int)$row['class_id'] : null,
+                        (string)($row['full_name'] ?? ''),
+                        (string)($row['short_name'] ?? ''),
+                        true
+                    );
 
                     $_SESSION['teachers_login_fail'] = 0;
                     $_SESSION['teachers_login_lock_until'] = 0;

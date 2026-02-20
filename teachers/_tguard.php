@@ -4,7 +4,7 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/tauth.php';
 require_once __DIR__ . '/../inc/db.php';
 
 session_start_secure();
@@ -325,14 +325,14 @@ if ($teacherId <= 0) {
 try {
     $teacherRow = tguard_load_teacher_row($pdo, $teacherId);
     if (!is_array($teacherRow)) {
-        admin_logout_session();
+        teacher_logout_session();
         session_start_secure();
         header('Location: ' . $tguard_login_path . '?err=invalid');
         exit;
     }
 
     if ($tguard_require_active && (int)($teacherRow['is_active'] ?? 0) !== 1) {
-        admin_logout_session();
+        teacher_logout_session();
         session_start_secure();
         header('Location: ' . $tguard_login_path . '?err=inactive');
         exit;

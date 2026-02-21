@@ -1,23 +1,25 @@
 <?php
-// admin/class_report.php — Whole class statistics term-by-term, subject-by-subject
+// teachers/class_report.php — Whole class statistics term-by-term, subject-by-subject
 // Updated drop-in:
 //  - Subjects list shows ONLY subjects that the selected class/group actually has results for (no zero rows)
 //  - Scope: This class / All parallels (same grade) / Parallels by track (same grade + track)
 //  - class_code format supported: "5 - A" (also tolerates "5-A", "5 -A", "5- A", and dash variants)
 //
 // Requires:
-//   /inc/auth.php, /inc/db.php, /admin/header.php, /admin/footer.php
+//   /inc/db.php, /teachers/_tguard.php, /teachers/header.php, /teachers/footer.php
 //
 // Notes:
 //   - This file expects h() and h_attr() helpers to be available (typically from your security/header includes).
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/auth.php';
 require_once __DIR__ . '/../inc/db.php';
-
-session_start_secure();
-require_admin();
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/class_report.php';
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 // ------------------------------
 // Helpers
@@ -98,14 +100,25 @@ $years = $pdo->query("SELECT DISTINCT academic_year FROM exams ORDER BY academic
 $classes = $pdo->query(
     "SELECT DISTINCT class_code
      FROM pupils
+     WHERE class_code IS NOT NULL AND TRIM(class_code) <> ''
      ORDER BY CAST(TRIM(SUBSTRING_INDEX(class_code, '-', 1)) AS UNSIGNED), class_code"
 )->fetchAll();
 
-$trackOptions = [
-    '' => 'All tracks',
-    'Aniq' => 'Aniq',
-    'Tabiiy' => 'Tabiiy',
-];
+$trackOptions = ['' => 'All tracks'];
+$trackRows = $pdo->query(
+    "SELECT DISTINCT track
+     FROM pupils
+     WHERE track IS NOT NULL AND TRIM(track) <> ''
+     ORDER BY track"
+)->fetchAll();
+foreach ($trackRows as $tr) {
+    $tv = trim((string)($tr['track'] ?? ''));
+    if ($tv !== '') $trackOptions[$tv] = $tv;
+}
+if ($selectedTrack !== '' && !array_key_exists($selectedTrack, $trackOptions)) {
+    $selectedTrack = '';
+}
+$trackRequiredError = ($scope === 'grade_track' && $selectedTrack === '');
 
 $scopeOptions = [
     'single'      => 'This class only',
@@ -227,6 +240,7 @@ if ($canRun && $hasExams && $selectedClasses) {
 // ------------------------------
 $agg = [];     // [subject_id][exam_id] => stats
 $overall = []; // [exam_id] => overall stats
+$groupAgg = []; // [subject_id][exam_id][group] => stats
 
 if ($canRun && $hasExams && $selectedClasses) {
     $inExams = implode(',', array_fill(0, count($examIds), '?'));
@@ -298,12 +312,9 @@ if ($canRun && $hasExams && $selectedClasses) {
         ];
     }
 
-// ------------------------------
-// Group-by-term-by-subject comparison (class_group 1 vs 2)
-// ------------------------------
-$groupAgg = []; // [subject_id][exam_id][group] => stats
-
-if ($canRun && $hasExams && $selectedClasses) {
+    // ------------------------------
+    // Group-by-term-by-subject comparison (class_group 1 vs 2)
+    // ------------------------------
     $inExams   = implode(',', array_fill(0, count($examIds), '?'));
     $inClasses = implode(',', array_fill(0, count($selectedClasses), '?'));
 
@@ -346,9 +357,6 @@ if ($canRun && $hasExams && $selectedClasses) {
             'pass' => $n > 0 ? ((int)$row['pass_n'] / $n * 100.0) : null,
         ];
     }
-}
-
-
     // Medians (PHP): load scores once
     $sql = "SELECT r.exam_id, r.subject_id, r.score
             FROM results r
@@ -445,6 +453,9 @@ $examLabel = static function (array $e): string {
       <div class="text-muted small">Whole class (or parallels) statistics term-by-term, subject-by-subject</div>
     </div>
     <div class="d-flex gap-2">
+      <button class="btn btn-outline-secondary btn-sm" type="button" onclick="window.print()">
+        <i class="bi bi-printer me-1"></i>Print
+      </button>
       <?php if ($canRun && $hasExams): ?>
         <a class="btn btn-outline-secondary btn-sm"
            href="?academic_year=<?= h_attr($selectedYear) ?>&class_code=<?= h_attr($selectedClass) ?>&track=<?= h_attr($selectedTrack) ?>&scope=<?= h_attr($scope) ?>&export=1">
@@ -483,7 +494,7 @@ $examLabel = static function (array $e): string {
 
         <div class="col-sm-6 col-lg-3">
           <label class="form-label">Scope</label>
-          <select name="scope" class="form-select">
+          <select name="scope" id="scopeSelect" class="form-select">
             <?php foreach ($scopeOptions as $val => $label): ?>
               <option value="<?= h_attr($val) ?>" <?= $val === $scope ? 'selected' : '' ?>><?= h($label) ?></option>
             <?php endforeach; ?>
@@ -492,21 +503,24 @@ $examLabel = static function (array $e): string {
             <?php if ($grade !== null): ?>
               Grade detected: <span class="mono"><?= h($grade) ?></span>
             <?php else: ?>
-              Grade not detected; parallels mode falls back to “This class only”.
+              Grade not detected; parallels mode falls back to "This class only".
             <?php endif; ?>
           </div>
         </div>
 
         <div class="col-sm-6 col-lg-3">
           <label class="form-label">Track</label>
-          <select name="track" class="form-select">
+          <select name="track" id="trackSelect" class="form-select<?= $trackRequiredError ? ' is-invalid' : '' ?>">
             <?php foreach ($trackOptions as $val => $label): ?>
               <option value="<?= h_attr($val) ?>" <?= $val === $selectedTrack ? 'selected' : '' ?>><?= h($label) ?></option>
             <?php endforeach; ?>
           </select>
           <div class="form-text">
-            Required only for “Parallels by track”.
+            Required only for "Parallels by track".
           </div>
+          <?php if ($trackRequiredError): ?>
+            <div class="invalid-feedback">Choose a track for "Parallels by track".</div>
+          <?php endif; ?>
         </div>
 
         <div class="col-12 d-flex gap-2">
@@ -515,7 +529,12 @@ $examLabel = static function (array $e): string {
         </div>
       </div>
 
-      <div class="mt-3 d-flex flex-wrap gap-2 small text-muted">
+      <div class="mt-3 d-flex flex-wrap gap-2 small">
+        <span class="badge text-bg-light text-dark border"><i class="bi bi-bullseye me-1"></i>Scope: <?= h($scopeOptions[$scope] ?? $scope) ?></span>
+        <span class="badge text-bg-light text-dark border"><i class="bi bi-mortarboard me-1"></i>Class: <?= h($selectedClass) ?></span>
+        <?php if ($selectedTrack !== ''): ?>
+          <span class="badge text-bg-light text-dark border"><i class="bi bi-diagram-3 me-1"></i>Track: <?= h($selectedTrack) ?></span>
+        <?php endif; ?>
         <span class="badge text-bg-light text-dark border"><i class="bi bi-check2-circle me-1"></i>Pass: <?= h(fmt1($PASS)) ?>/40</span>
         <span class="badge text-bg-light text-dark border"><i class="bi bi-award me-1"></i>Good: <?= h(fmt1($GOOD)) ?>/40</span>
         <span class="badge text-bg-light text-dark border"><i class="bi bi-stars me-1"></i>Excellent: <?= h(fmt1($EXCELLENT)) ?>/40</span>
@@ -533,7 +552,7 @@ $examLabel = static function (array $e): string {
     <div class="alert alert-warning">
       No subject results found for the selected filters (year/class/scope/track).
       <?php if ($scope === 'grade_track' && $selectedTrack === ''): ?>
-        <div class="small mt-1">Tip: choose a Track when using “Parallels by track”.</div>
+        <div class="small mt-1">Tip: choose a Track when using "Parallels by track".</div>
       <?php endif; ?>
     </div>
 
@@ -1053,9 +1072,6 @@ $examLabel = static function (array $e): string {
     </div>
   </div>
 <?php endif; ?>
-
-
-
 
   <?php endif; ?>
 </div>

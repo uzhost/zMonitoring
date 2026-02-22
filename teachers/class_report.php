@@ -88,7 +88,7 @@ $canRun = ($selectedYear !== '' && $selectedClass !== '' && !$missingTrackForSco
 // ------------------------------
 // Resolve group classes (single vs parallels)
 // ------------------------------
-$grade = ($selectedClass !== '') ? extract_grade($pdo, $selectedClass) : null;
+$grade = ($selectedClass !== '') ? resolve_class_grade($pdo, $selectedClass) : null;
 $selectedClasses = []; // list of class_code included
 
 if ($canRun) {
@@ -342,12 +342,12 @@ if ($canRun && $hasExams && $selectedClasses) {
     foreach ($scores as $sid => $byExam) {
         foreach ($byExam as $eid => $list) {
             if (!isset($agg[(int)$sid][(int)$eid])) continue;
-            $agg[(int)$sid][(int)$eid]['median'] = median($list);
+            $agg[(int)$sid][(int)$eid]['median'] = stats_median($list);
         }
     }
     foreach ($overallScores as $eid => $list) {
         if (!isset($overall[(int)$eid])) continue;
-        $overall[(int)$eid]['median'] = median($list);
+        $overall[(int)$eid]['median'] = stats_median($list);
         $sd = $overall[(int)$eid]['sd'] ?? null;
         $avg = $overall[(int)$eid]['avg'] ?? null;
         $med = $overall[(int)$eid]['median'] ?? null;
@@ -395,8 +395,8 @@ if ($canRun && $hasExams && $selectedClasses) {
 
         if ($n > 0) {
             $avg = array_sum($vals) / $n;
-            $med = median($vals);
-            $sd = stddev_samp($vals);
+            $med = stats_median($vals);
+            $sd = stats_stddev_sample($vals);
             if ($med !== null && $sd !== null && $sd > 0.00001) {
                 $skew = ($avg - $med) / $sd;
             }
@@ -415,7 +415,7 @@ if ($canRun && $hasExams && $selectedClasses) {
             'median' => $med,
             'sd' => $sd,
             'skew' => $skew,
-            'direction' => skew_direction($skew),
+            'direction' => describe_skew_direction($skew),
             'weak_share' => $n > 0 ? ($bands['weak'] / $n * 100.0) : null,
             'lower_share' => $n > 0 ? ($bands['lower'] / $n * 100.0) : null,
             'middle_share' => $n > 0 ? ($bands['middle'] / $n * 100.0) : null,
@@ -839,9 +839,9 @@ $overviewStats = [
         <?php if ($selectedTrack !== ''): ?>
           <span class="cr-chip"><i class="bi bi-diagram-3"></i>Track: <?= h($selectedTrack) ?></span>
         <?php endif; ?>
-        <span class="cr-chip metric"><i class="bi bi-check2-circle"></i>Pass: <?= h(fmt1($PASS)) ?>/40</span>
-        <span class="cr-chip metric"><i class="bi bi-award"></i>Good: <?= h(fmt1($GOOD)) ?>/40</span>
-        <span class="cr-chip metric"><i class="bi bi-stars"></i>Excellent: <?= h(fmt1($EXCELLENT)) ?>/40</span>
+        <span class="cr-chip metric"><i class="bi bi-check2-circle"></i>Pass: <?= h(format_decimal_1($PASS)) ?>/40</span>
+        <span class="cr-chip metric"><i class="bi bi-award"></i>Good: <?= h(format_decimal_1($GOOD)) ?>/40</span>
+        <span class="cr-chip metric"><i class="bi bi-stars"></i>Excellent: <?= h(format_decimal_1($EXCELLENT)) ?>/40</span>
       </div>
     </div>
   </form>
@@ -1098,7 +1098,7 @@ $overviewStats = [
                     $stt = $overall[$eid] ?? null;
                     $avg = $stt['avg'] ?? null;
                     $delta = ($avg !== null && $prevAvg !== null) ? ($avg - $prevAvg) : null;
-                    [$dCls, $dIc, $dTxt] = delta_badge($delta);
+                    [$dCls, $dIc, $dTxt] = badge_delta($delta);
                     $overallRowClass = ($eid === $latestExamId) ? 'is-latest' : '';
                 ?>
                   <tr class="<?= h_attr($overallRowClass) ?>">
@@ -1108,12 +1108,12 @@ $overviewStats = [
                     <td class="text-end mono"><?= h((string)($stt['n'] ?? 0)) ?></td>
                     <td class="text-end">
                       <span class="cr-overall-metric-badges">
-                        <span class="badge text-bg-dark mono"><?= h(fmt1($avg)) ?></span>
+                        <span class="badge text-bg-dark mono"><?= h(format_decimal_1($avg)) ?></span>
                         <span class="badge <?= h_attr($dCls) ?> mono"><i class="bi <?= h_attr($dIc) ?> me-1"></i><?= h($dTxt) ?></span>
                       </span>
                     </td>
-                    <td class="text-end mono"><?= h(fmt1($stt['median'] ?? null)) ?></td>
-                    <td class="text-end mono"><?= h(fmtPct($stt['pass'] ?? null)) ?></td>
+                    <td class="text-end mono"><?= h(format_decimal_1($stt['median'] ?? null)) ?></td>
+                    <td class="text-end mono"><?= h(format_percent_1($stt['pass'] ?? null)) ?></td>
                     <td class="text-end mono"><?= h($stt && $stt['sd'] !== null ? number_format((float)$stt['sd'], 2, '.', '') : '—') ?></td>
                     <td class="text-end mono"><?= h($stt && isset($stt['skew']) && $stt['skew'] !== null ? number_format((float)$stt['skew'], 2, '.', '') : '—') ?></td>
                   </tr>
@@ -1302,7 +1302,7 @@ $overviewStats = [
                     <tbody>
                       <?php foreach ($prioritySubjects as $it): ?>
                         <?php
-                          [$dCls, $dIc, $dTxt] = delta_badge(isset($it['delta_avg']) ? (float)$it['delta_avg'] : null);
+                          [$dCls, $dIc, $dTxt] = badge_delta(isset($it['delta_avg']) ? (float)$it['delta_avg'] : null);
                           $passDelta = $it['delta_pass'] ?? null;
                           $passDeltaText = $passDelta === null ? '—' : ((($passDelta > 0) ? '+' : '') . number_format((float)$passDelta, 1, '.', '') . ' pp');
                           $passDeltaCls = $passDelta === null ? '' : (($passDelta > 0) ? 'pos' : (($passDelta < 0) ? 'neg' : 'zero'));
@@ -1314,13 +1314,13 @@ $overviewStats = [
                           </td>
                           <td class="ai-n"><?= h((string)($it['latest_n'] ?? 0)) ?></td>
                           <td class="text-center">
-                            <span class="badge <?= h_attr(score_badge_class(isset($it['latest_avg']) ? (float)$it['latest_avg'] : null, $PASS, $GOOD, $EXCELLENT)) ?> mono ai-pill"><?= h(fmt1($it['latest_avg'] ?? null)) ?></span>
+                            <span class="badge <?= h_attr(badge_score_by_threshold(isset($it['latest_avg']) ? (float)$it['latest_avg'] : null, $PASS, $GOOD, $EXCELLENT)) ?> mono ai-pill"><?= h(format_decimal_1($it['latest_avg'] ?? null)) ?></span>
                           </td>
                           <td class="text-center">
                             <span class="badge <?= h_attr($dCls) ?> mono delta d-inline-flex align-items-center ai-pill"><i class="bi <?= h_attr($dIc) ?> me-1"></i><?= h($dTxt) ?></span>
                           </td>
                           <td class="ai-pass-cell">
-                            <span class="badge text-bg-dark mono ai-pill"><?= h(fmtPct($it['latest_pass'] ?? null)) ?></span>
+                            <span class="badge text-bg-dark mono ai-pill"><?= h(format_percent_1($it['latest_pass'] ?? null)) ?></span>
                             <div class="ai-pass-delta <?= h_attr($passDeltaCls) ?>"><?= h($passDeltaText) ?></div>
                           </td>
                         </tr>
@@ -1355,7 +1355,7 @@ $overviewStats = [
                     <tbody>
                       <?php foreach ($momentumSubjects as $it): ?>
                         <?php
-                          [$dCls, $dIc, $dTxt] = delta_badge(isset($it['delta_avg']) ? (float)$it['delta_avg'] : null);
+                          [$dCls, $dIc, $dTxt] = badge_delta(isset($it['delta_avg']) ? (float)$it['delta_avg'] : null);
                           $passDelta = $it['delta_pass'] ?? null;
                           $passDeltaText = $passDelta === null ? '—' : ((($passDelta > 0) ? '+' : '') . number_format((float)$passDelta, 1, '.', '') . ' pp');
                           $passDeltaCls = $passDelta === null ? '' : (($passDelta > 0) ? 'pos' : (($passDelta < 0) ? 'neg' : 'zero'));
@@ -1367,13 +1367,13 @@ $overviewStats = [
                           </td>
                           <td class="ai-n"><?= h((string)($it['latest_n'] ?? 0)) ?></td>
                           <td class="text-center">
-                            <span class="badge <?= h_attr(score_badge_class(isset($it['latest_avg']) ? (float)$it['latest_avg'] : null, $PASS, $GOOD, $EXCELLENT)) ?> mono ai-pill"><?= h(fmt1($it['latest_avg'] ?? null)) ?></span>
+                            <span class="badge <?= h_attr(badge_score_by_threshold(isset($it['latest_avg']) ? (float)$it['latest_avg'] : null, $PASS, $GOOD, $EXCELLENT)) ?> mono ai-pill"><?= h(format_decimal_1($it['latest_avg'] ?? null)) ?></span>
                           </td>
                           <td class="text-center">
                             <span class="badge <?= h_attr($dCls) ?> mono delta d-inline-flex align-items-center ai-pill"><i class="bi <?= h_attr($dIc) ?> me-1"></i><?= h($dTxt) ?></span>
                           </td>
                           <td class="ai-pass-cell">
-                            <span class="badge text-bg-dark mono ai-pill"><?= h(fmtPct($it['latest_pass'] ?? null)) ?></span>
+                            <span class="badge text-bg-dark mono ai-pill"><?= h(format_percent_1($it['latest_pass'] ?? null)) ?></span>
                             <div class="ai-pass-delta <?= h_attr($passDeltaCls) ?>"><?= h($passDeltaText) ?></div>
                           </td>
                         </tr>
@@ -1465,8 +1465,8 @@ $overviewStats = [
             $deltaElite = ($prevDist && isset($prevDist['elite_share']) && $eliteShare !== null && $prevDist['elite_share'] !== null)
               ? ((float)$eliteShare - (float)$prevDist['elite_share'])
               : null;
-            [$midCls, $midLabel] = middle_state($latestDist['lower_share'] ?? null, $latestDist['middle_share'] ?? null);
-            [$riskCls, $riskLabel] = distribution_risk_badge($weakShare, $eliteShare, $latestDist['skew'] ?? null);
+            [$midCls, $midLabel] = badge_middle_state($latestDist['lower_share'] ?? null, $latestDist['middle_share'] ?? null);
+            [$riskCls, $riskLabel] = badge_distribution_risk($weakShare, $eliteShare, $latestDist['skew'] ?? null);
           ?>
           <div class="row g-2 mb-3">
             <div class="col-md-3">
@@ -1533,7 +1533,7 @@ $overviewStats = [
                     'bands' => []
                   ];
                   $dn = (int)($dist['n'] ?? 0);
-                  [$riskCls, $riskLabel] = distribution_risk_badge($dist['weak_share'] ?? null, $dist['elite_share'] ?? null, $dist['skew'] ?? null);
+                  [$riskCls, $riskLabel] = badge_distribution_risk($dist['weak_share'] ?? null, $dist['elite_share'] ?? null, $dist['skew'] ?? null);
                   $weakDeltaRow = ($prevRowDist && isset($prevRowDist['weak_share']) && $prevRowDist['weak_share'] !== null && ($dist['weak_share'] ?? null) !== null)
                     ? ((float)$dist['weak_share'] - (float)$prevRowDist['weak_share']) : null;
                   $eliteDeltaRow = ($prevRowDist && isset($prevRowDist['elite_share']) && $prevRowDist['elite_share'] !== null && ($dist['elite_share'] ?? null) !== null)
@@ -1832,8 +1832,8 @@ $overviewStats = [
 
                 $avg = $stt['avg'] ?? null;
                 $delta = ($avg !== null && $prev !== null) ? ($avg - $prev) : null;
-                [$dCls, $dIc, $dTxt] = delta_badge($delta);
-                $avgCls = score_badge_class($avg, $PASS, $GOOD, $EXCELLENT);
+                [$dCls, $dIc, $dTxt] = badge_delta($delta);
+                $avgCls = badge_score_by_threshold($avg, $PASS, $GOOD, $EXCELLENT);
               ?>
               <?php $isLatestExamCol = ($eid === $latestExamId); ?>
               <td class="<?= $isLatestExamCol ? 'latest-exam-col' : '' ?>">
@@ -1844,7 +1844,7 @@ $overviewStats = [
                         <div class="cell-top">
                           <div class="d-flex flex-wrap gap-1 align-items-center">
                             <span class="badge <?= h_attr($avgCls) ?> mono avg-chip">
-                              <?= h(fmt1($avg)) ?>
+                              <?= h(format_decimal_1($avg)) ?>
                             </span>
                             <span class="badge <?= h_attr($dCls) ?> mono delta-chip d-inline-flex align-items-center">
                               <i class="bi <?= h_attr($dIc) ?> me-1"></i><?= h($dTxt) ?>
@@ -1864,10 +1864,10 @@ $overviewStats = [
                           </thead>
                           <tbody>
                             <tr>
-                              <td><?= h(fmt1($stt['median'] ?? null)) ?></td>
-                              <td><?= h(fmtPct($stt['pass'])) ?></td>
-                              <td><?= h(fmt1($stt['min'])) ?>–<?= h(fmt1($stt['max'])) ?></td>
-                              <td><?= h(fmt2($stt['sd'])) ?></td>
+                              <td><?= h(format_decimal_1($stt['median'] ?? null)) ?></td>
+                              <td><?= h(format_percent_1($stt['pass'])) ?></td>
+                              <td><?= h(format_decimal_1($stt['min'])) ?>–<?= h(format_decimal_1($stt['max'])) ?></td>
+                              <td><?= h(format_decimal_2($stt['sd'])) ?></td>
                             </tr>
                           </tbody>
                         </table>
@@ -1886,7 +1886,7 @@ $overviewStats = [
     <div class="small text-muted mt-2">
       <i class="bi bi-info-circle me-1"></i>
       Subjects are limited to those with actual results for the selected group/year.
-      Pass% = share of results where score ≥ <?= h(fmt1($PASS)) ?>.
+      Pass% = share of results where score ≥ <?= h(format_decimal_1($PASS)) ?>.
       Deltas compare averages to the previous exam (ordered by term/date).
       <span class="ms-2">Tip: scroll inside the box; headers and the Subject column stay visible.</span>
     </div>
@@ -2152,10 +2152,10 @@ $overviewStats = [
                     $p1 = $g1['pass'] ?? null;
                     $p2 = $g2['pass'] ?? null;
                     $delta = ($a1 !== null && $a2 !== null) ? ($a2 - $a1) : null;
-                    [$dCls, $dIc, $dTxt] = delta_badge($delta);
+                    [$dCls, $dIc, $dTxt] = badge_delta($delta);
 
-                    $a1Cls = score_badge_class($a1, $PASS, $GOOD, $EXCELLENT);
-                    $a2Cls = score_badge_class($a2, $PASS, $GOOD, $EXCELLENT);
+                    $a1Cls = badge_score_by_threshold($a1, $PASS, $GOOD, $EXCELLENT);
+                    $a2Cls = badge_score_by_threshold($a2, $PASS, $GOOD, $EXCELLENT);
                   ?>
 
                   <td>
@@ -2185,14 +2185,14 @@ $overviewStats = [
                                 <?php if ($a1 === null): ?>
                                   <span class="gmx-val dim">—</span>
                                 <?php else: ?>
-                                  <span class="badge <?= h_attr($a1Cls) ?> mono gmx-badge"><?= h(fmt1($a1)) ?></span>
+                                  <span class="badge <?= h_attr($a1Cls) ?> mono gmx-badge"><?= h(format_decimal_1($a1)) ?></span>
                                 <?php endif; ?>
                               </td>
                               <td class="gmx-val">
                                 <?php if ($a2 === null): ?>
                                   <span class="gmx-val dim">—</span>
                                 <?php else: ?>
-                                  <span class="badge <?= h_attr($a2Cls) ?> mono gmx-badge"><?= h(fmt1($a2)) ?></span>
+                                  <span class="badge <?= h_attr($a2Cls) ?> mono gmx-badge"><?= h(format_decimal_1($a2)) ?></span>
                                 <?php endif; ?>
                               </td>
                             </tr>
@@ -2202,14 +2202,14 @@ $overviewStats = [
                                 <?php if ($p1 === null): ?>
                                   <span class="gmx-val dim">—</span>
                                 <?php else: ?>
-                                  <span class="pass-pill"><?= h(fmtPct($p1)) ?></span>
+                                  <span class="pass-pill"><?= h(format_percent_1($p1)) ?></span>
                                 <?php endif; ?>
                               </td>
                               <td class="gmx-val">
                                 <?php if ($p2 === null): ?>
                                   <span class="gmx-val dim">—</span>
                                 <?php else: ?>
-                                  <span class="pass-pill"><?= h(fmtPct($p2)) ?></span>
+                                  <span class="pass-pill"><?= h(format_percent_1($p2)) ?></span>
                                 <?php endif; ?>
                               </td>
                             </tr>
@@ -2229,7 +2229,7 @@ $overviewStats = [
       <div class="small text-muted mt-2">
         <i class="bi bi-info-circle me-1"></i>
         This matrix compares <span class="fw-semibold">class_group 1 vs 2</span> per subject per exam (term/date order).
-        Pass% = score ≥ <?= h(fmt1($PASS)) ?>. Δ is computed only when both groups have data in the same term.
+        Pass% = score ≥ <?= h(format_decimal_1($PASS)) ?>. Δ is computed only when both groups have data in the same term.
       </div>
     </div>
   </div>

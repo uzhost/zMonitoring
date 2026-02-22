@@ -19,6 +19,7 @@ $tguard_allowed_methods = ['GET', 'HEAD'];
 $tguard_allowed_levels = [1, 2, 3];
 $tguard_login_path = '/teachers/login.php';
 $tguard_fallback_path = '/teachers/class_report.php';
+$tguard_enforce_read_scope = true;
 $tguard_require_active = true;
 require_once __DIR__ . '/_tguard.php';
 

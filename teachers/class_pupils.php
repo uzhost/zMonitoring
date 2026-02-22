@@ -1,48 +1,16 @@
 <?php
-// admin/class_pupils.php — Class pupils matrix (subjects x terms) with optional term comparison
+// teachers/class_pupils.php - Class pupils matrix (subjects x terms) with optional term comparison
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/tauth.php';
 require_once __DIR__ . '/../inc/db.php';
+require_once __DIR__ . '/../inc/functions.php';
 
 session_start_secure();
 require_admin(); // adjust if needed (e.g., require_role('viewer'))
 
-$page_title = 'Class pupils — term comparison';
-
-// -------------------------------
-// Helpers
-// -------------------------------
-function fmt1(mixed $v): string
-{
-    if ($v === null || $v === '') return '—';
-    $n = (float)$v;
-    return (abs($n - round($n)) < 0.00001) ? (string)(int)round($n) : number_format($n, 1, '.', '');
-}
-
-function badge_score_class(float $score): string
-{
-    if ($score <= 18.39) return 'text-bg-danger';
-    if ($score <= 24.39) return 'text-bg-warning text-dark';
-    if ($score <= 34.39) return 'text-bg-primary text-white';
-    return 'text-bg-success';
-}
-
-function delta_badge(float $d): array
-{
-    if (abs($d) < 0.00001) return ['cls' => 'text-bg-secondary', 'ic' => 'bi-dash', 'txt' => '0'];
-    if ($d > 0) return ['cls' => 'text-bg-success', 'ic' => 'bi-arrow-up', 'txt' => '+' . fmt1($d)];
-    return ['cls' => 'text-bg-danger', 'ic' => 'bi-arrow-down', 'txt' => fmt1($d)];
-}
-
-function safe_int(?string $v, int $min = 0, int $max = 999): int
-{
-    $n = (int)($v ?? '');
-    if ($n < $min) return $min;
-    if ($n > $max) return $max;
-    return $n;
-}
+$page_title = 'Class pupils - term comparison';
 
 // -------------------------------
 // Inputs
@@ -53,7 +21,7 @@ $academic_year = trim((string)($_GET['academic_year'] ?? ''));
 // term_mode: all (comparison) | one (single term snapshot)
 $term_mode = strtolower(trim((string)($_GET['term_mode'] ?? 'all')));
 $term_mode = in_array($term_mode, ['all', 'one'], true) ? $term_mode : 'all';
-$term_one  = safe_int(isset($_GET['term']) ? (string)$_GET['term'] : null, 0, 10); // used when term_mode=one
+$term_one  = clamp_int(isset($_GET['term']) ? (string)$_GET['term'] : null, 0, 10); // used when term_mode=one
 
 $sort = trim((string)($_GET['sort'] ?? 'surname'));     // surname | last_total | last_delta
 $dir  = strtolower(trim((string)($_GET['dir'] ?? 'asc'))); // asc | desc
@@ -355,18 +323,7 @@ require __DIR__ . '/header.php';
 $termLabels = [];
 foreach ($termExam as $t => $e) {
     $d = $e['exam_date'] ? date('d M Y', strtotime((string)$e['exam_date'])) : '—';
-    $termLabels[(int)$t] = "T{$t} — " . (string)$e['exam_name'] . " ({$d})";
-}
-
-function sort_link(string $label, string $key, string $currentSort, string $currentDir, array $qBase): string
-{
-    $dir = 'asc';
-    if ($currentSort === $key && $currentDir === 'asc') $dir = 'desc';
-    $q = $qBase + ['sort' => $key, 'dir' => $dir];
-    $href = '?' . http_build_query($q);
-    $ic = '';
-    if ($currentSort === $key) $ic = $currentDir === 'asc' ? ' <i class="bi bi-sort-up"></i>' : ' <i class="bi bi-sort-down"></i>';
-    return '<a class="link-dark text-decoration-none" href="' . h($href) . '">' . h($label) . $ic . '</a>';
+    $termLabels[(int)$t] = "T{$t} - " . (string)$e['exam_name'] . " ({$d})";
 }
 
 $termsHuman = ($term_mode === 'one')
@@ -526,7 +483,7 @@ $modeOneActive = $term_mode === 'one';
           <select name="sort" class="form-select">
             <option value="surname" <?= $sort==='surname'?'selected':'' ?>>Surname / name</option>
             <option value="last_total" <?= $sort==='last_total'?'selected':'' ?>><?= $term_mode === 'one' ? 'Term total' : 'Last term total' ?></option>
-            <option value="last_delta" <?= $sort==='last_delta'?'selected':'' ?>>Δ total (prev→last)</option>
+            <option value="last_delta" <?= $sort==='last_delta'?'selected':'' ?>>Delta total (prev->last)</option>
           </select>
           <select name="dir" class="form-select" style="max-width:110px">
             <option value="asc" <?= $dir==='asc'?'selected':'' ?>>ASC</option>
@@ -581,7 +538,7 @@ $modeOneActive = $term_mode === 'one';
           <div class="small-muted">
             Pupils: <span class="mono"><?= h((string)count($pupils)) ?></span> ·
             Taken subjects: <span class="mono"><?= h((string)count($subjects)) ?></span> ·
-            Max total (taken subjects): <span class="mono"><?= h(fmt1($maxTotal)) ?></span>
+            Max total (taken subjects): <span class="mono"><?= h(format_decimal_1($maxTotal, true)) ?></span>
           </div>
         </div>
 
@@ -589,7 +546,7 @@ $modeOneActive = $term_mode === 'one';
           <span class="badge text-bg-danger">0-18.4</span>
           <span class="badge text-bg-warning text-dark">18.5-24.4</span>
           <span class="badge text-bg-primary text-white">24.5-34.4</span>
-          <span class="badge text-bg-success">34.5–40</span>
+          <span class="badge text-bg-success">34.5-40</span>
           <?php if ($term_mode === 'all'): ?>
             <span class="badge text-bg-success"><i class="bi bi-arrow-up me-1"></i>Improved</span>
             <span class="badge text-bg-danger"><i class="bi bi-arrow-down me-1"></i>Dropped</span>
@@ -608,11 +565,11 @@ $modeOneActive = $term_mode === 'one';
               <div class="d-flex align-items-center justify-content-between">
                 <div>
                   <div class="small-muted">Average total</div>
-                  <div class="fw-semibold mono"><?= h(fmt1($classAvg[$t] ?? 0.0)) ?></div>
+                  <div class="fw-semibold mono"><?= h(format_decimal_1($classAvg[$t] ?? 0.0, true)) ?></div>
                 </div>
                 <div class="text-end">
                   <div class="small-muted">Median total</div>
-                  <div class="fw-semibold mono"><?= h(fmt1($classMedian[$t] ?? 0.0)) ?></div>
+                  <div class="fw-semibold mono"><?= h(format_decimal_1($classMedian[$t] ?? 0.0, true)) ?></div>
                 </div>
               </div>
             </div>
@@ -623,10 +580,10 @@ $modeOneActive = $term_mode === 'one';
       <?php if ($term_mode === 'all' && $prevToLast !== null): ?>
         <?php
           $d = (float)($classAvg[$lastTerm] ?? 0.0) - (float)($classAvg[$prevToLast] ?? 0.0);
-          $db = delta_badge($d);
+          $db = badge_delta($d, true);
         ?>
         <div class="mt-3">
-          <div class="small-muted">Average change (T<?= h((string)$prevToLast) ?> → T<?= h((string)$lastTerm) ?>)</div>
+          <div class="small-muted">Average change (T<?= h((string)$prevToLast) ?> -> T<?= h((string)$lastTerm) ?>)</div>
           <span class="badge <?= h($db['cls']) ?> mono">
             <i class="bi <?= h($db['ic']) ?> me-1"></i><?= h($db['txt']) ?>
           </span>
@@ -674,14 +631,14 @@ $modeOneActive = $term_mode === 'one';
           <tr>
             <th class="sticky-left text-center" rowspan="2" style="width:54px">#</th>
             <th class="sticky-left-2" rowspan="2" style="min-width:266px">
-              <?= sort_link('Pupil', 'surname', $sort, $dir, $qBase) ?>
+              <?= build_sort_link_html('Pupil', 'surname', $sort, $dir, $qBase) ?>
             </th>
 
             <th class="sticky-left-3 text-center" rowspan="2" style="width:140px">
-              <?= sort_link($term_mode === 'one' ? 'Term total' : 'Last total', 'last_total', $sort, $dir, $qBase) ?>
+              <?= build_sort_link_html($term_mode === 'one' ? 'Term total' : 'Last total', 'last_total', $sort, $dir, $qBase) ?>
               <div class="small-muted"><?= $term_mode === 'one' ? ('T'.h((string)$lastTerm)) : ('T'.h((string)$lastTerm)) ?></div>
               <?php if ($term_mode === 'all'): ?>
-                <div class="small-muted"><?= sort_link('Δ (prev→last)', 'last_delta', $sort, $dir, $qBase) ?></div>
+                <div class="small-muted"><?= build_sort_link_html('Delta (prev->last)', 'last_delta', $sort, $dir, $qBase) ?></div>
               <?php endif; ?>
             </th>
 
@@ -695,7 +652,7 @@ $modeOneActive = $term_mode === 'one';
 
             <th class="text-center group-sep" colspan="<?= h((string)count($terms)) ?>">
               Totals (taken subjects)
-              <div class="small-muted">max <?= h(fmt1($maxTotal)) ?></div>
+              <div class="small-muted">max <?= h(format_decimal_1($maxTotal, true)) ?></div>
             </th>
           </tr>
 
@@ -733,7 +690,7 @@ $modeOneActive = $term_mode === 'one';
                   $hasPrev = true;
                   $dTotal = $lastTotal - (float)($total[$pid][$prevToLast] ?? 0.0);
               }
-              $dbTot = delta_badge($dTotal);
+              $dbTot = badge_delta($dTotal, true);
             ?>
             <tr>
               <td class="sticky-left text-center mono"><?= h((string)$rowNum) ?></td>
@@ -760,7 +717,7 @@ $modeOneActive = $term_mode === 'one';
               </td>
 
               <td class="sticky-left-3 text-center">
-                <div class="badge text-bg-dark mono"><?= h(fmt1($lastTotal)) ?></div>
+                <div class="badge text-bg-dark mono"><?= h(format_decimal_1($lastTotal, true)) ?></div>
                 <?php if ($term_mode === 'all'): ?>
                   <div class="delta-line">
                     <?php if ($hasPrev): ?>
@@ -788,13 +745,13 @@ $modeOneActive = $term_mode === 'one';
 
                     if ($v !== null) {
                         $sv = (float)$v;
-                        $cell = fmt1($sv);
-                        $badgeCls = badge_score_class($sv);
+                        $cell = format_decimal_1($sv, true);
+                        $badgeCls = badge_score_by_threshold($sv, 18.4, 24.4, 34.4, true);
 
                         if ($term_mode === 'all') {
                             if ($prevScore !== null) {
                                 $dd = $sv - (float)$prevScore;
-                                $db = delta_badge($dd);
+                                $db = badge_delta($dd, true);
                                 $deltaHtml = '<div class="small-muted mono delta-line"><i class="bi '.$db['ic'].'"></i> '.h($db['txt']).'</div>';
                             } else {
                                 $deltaHtml = '<div class="small-muted mono delta-line">—</div>';
@@ -828,7 +785,7 @@ $modeOneActive = $term_mode === 'one';
                   if ($term_mode === 'all') {
                       if ($prevTot !== null) {
                           $dd = $tv - (float)$prevTot;
-                          $db = delta_badge($dd);
+                          $db = badge_delta($dd, true);
                           $deltaHtml = '<div class="small-muted mono delta-line"><i class="bi '.$db['ic'].'"></i> '.h($db['txt']).'</div>';
                       } else {
                           $deltaHtml = '<div class="small-muted mono delta-line">—</div>';
@@ -837,7 +794,7 @@ $modeOneActive = $term_mode === 'one';
                   $prevTot = $tv;
                 ?>
                 <td class="score-cell group-sep">
-                  <span class="badge text-bg-dark mono score-badge"><?= h(fmt1($tv)) ?></span>
+                  <span class="badge text-bg-dark mono score-badge"><?= h(format_decimal_1($tv, true)) ?></span>
                   <?= $term_mode === 'all' ? $deltaHtml : '' ?>
                 </td>
               <?php endforeach; ?>

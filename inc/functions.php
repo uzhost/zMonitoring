@@ -210,6 +210,61 @@ if (!function_exists('build_sort_link_html')) {
     }
 }
 
+if (!function_exists('format_decimal_trimmed')) {
+    function format_decimal_trimmed(mixed $value, int $precision = 2): string
+    {
+        if ($value === null || $value === '') return '—';
+        if ($precision < 0) $precision = 0;
+
+        $out = number_format((float)$value, $precision, '.', '');
+        if ($precision === 0) return $out;
+        return rtrim(rtrim($out, '0'), '.');
+    }
+}
+
+if (!function_exists('badge_score_by_percent_of_max')) {
+    function badge_score_by_percent_of_max(?float $score, int $maxPoints = 40): string
+    {
+        if ($score === null) return 'text-bg-secondary-subtle border text-secondary-emphasis';
+        if ($maxPoints <= 0) $maxPoints = 40;
+
+        $pct = ($score / $maxPoints) * 100.0;
+        if ($pct < 46.0) return 'text-bg-danger';
+        if ($pct < 66.0) return 'text-bg-warning text-dark';
+        if ($pct < 86.0) return 'text-bg-primary';
+        return 'text-bg-success';
+    }
+}
+
+if (!function_exists('label_exam_name_only')) {
+    function label_exam_name_only(?array $exam, int $fallbackId = 0): string
+    {
+        if (!$exam) return $fallbackId > 0 ? ('Exam #' . $fallbackId) : '—';
+        $name = trim((string)($exam['exam_name'] ?? ''));
+        return $name !== '' ? $name : ('Exam #' . (int)($exam['id'] ?? $fallbackId));
+    }
+}
+
+if (!function_exists('badge_delta_change_class')) {
+    function badge_delta_change_class(?float $diff): string
+    {
+        if ($diff === null) return 'text-bg-secondary-subtle border text-secondary-emphasis';
+        if ($diff > 0) return 'text-bg-success';
+        if ($diff < 0) return 'text-bg-danger';
+        return 'text-bg-secondary';
+    }
+}
+
+if (!function_exists('render_delta_direction_icon')) {
+    function render_delta_direction_icon(?float $diff): string
+    {
+        if ($diff === null) return '<span class="diff-icon text-muted" title="No data">—</span>';
+        if ($diff > 0) return '<span class="diff-icon text-success" title="Increase">▲</span>';
+        if ($diff < 0) return '<span class="diff-icon text-danger" title="Decrease">▼</span>';
+        return '<span class="diff-icon text-muted" title="No change">→</span>';
+    }
+}
+
 // Backward-compatible aliases (thin wrappers) so legacy pages keep working during migration.
 if (!function_exists('fmt1')) {
     function fmt1(mixed $n, bool $trimTrailingZero = false): string { return format_decimal_1($n, $trimTrailingZero); }

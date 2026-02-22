@@ -3,12 +3,14 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/tauth.php';
 require_once __DIR__ . '/../inc/db.php';
 require_once __DIR__ . '/../inc/functions.php';
-
-session_start_secure();
-require_admin(); // adjust if needed (e.g., require_role('viewer'))
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/class_pupils.php';
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 $page_title = 'Class pupils - term comparison';
 

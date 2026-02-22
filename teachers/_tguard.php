@@ -219,7 +219,7 @@ if (!function_exists('tguard_sync_session_teacher')) {
 }
 
 if (!function_exists('tguard_match_medium_scope')) {
-    function tguard_match_medium_scope(PDO $pdo, array $teacherRow, ?int $forcedClassId, ?string $forcedClassCode): bool
+    function tguard_match_medium_scope(PDO $pdo, array $teacherRow, ?int $forcedClassId, ?string $forcedClassCode, ?int $forcedPupilId = null, ?string $forcedStudentLogin = null): bool
     {
         $teacherClassId = (int)($teacherRow['class_id'] ?? 0);
         $teacherClassCode = trim((string)($teacherRow['class_code'] ?? ''));
@@ -236,7 +236,7 @@ if (!function_exists('tguard_match_medium_scope')) {
             return mb_strtolower($targetClassCode, 'UTF-8') === mb_strtolower($teacherClassCode, 'UTF-8');
         }
 
-        $pupilId = tguard_req_int('pupil_id');
+        $pupilId = $forcedPupilId ?? tguard_req_int('pupil_id');
         if ($pupilId !== null) {
             $st = $pdo->prepare('
                 SELECT p.class_id, p.class_code
@@ -258,6 +258,42 @@ if (!function_exists('tguard_match_medium_scope')) {
             return mb_strtolower($pupilClassCode, 'UTF-8') === mb_strtolower($teacherClassCode, 'UTF-8');
         }
 
+        $studentLogin = $forcedStudentLogin ?? tguard_req_str('student_login', 80);
+        if ($studentLogin !== null && $studentLogin !== '') {
+            $st = $pdo->prepare('
+                SELECT p.class_id, p.class_code
+                FROM pupils p
+                WHERE p.student_login = :login
+                LIMIT 1
+            ');
+            $st->execute([':login' => $studentLogin]);
+            $pupil = $st->fetch(PDO::FETCH_ASSOC);
+            if (!is_array($pupil)) return false;
+
+            $pupilClassId = (int)($pupil['class_id'] ?? 0);
+            if ($pupilClassId > 0 && $teacherClassId > 0) {
+                return $pupilClassId === $teacherClassId;
+            }
+
+            $pupilClassCode = trim((string)($pupil['class_code'] ?? ''));
+            if ($pupilClassCode === '' || $teacherClassCode === '') return false;
+            return mb_strtolower($pupilClassCode, 'UTF-8') === mb_strtolower($teacherClassCode, 'UTF-8');
+        }
+
+        return false;
+    }
+}
+
+if (!function_exists('tguard_request_has_scope_hint')) {
+    function tguard_request_has_scope_hint(?int $forcedClassId, ?string $forcedClassCode, ?int $forcedPupilId = null, ?string $forcedStudentLogin = null): bool
+    {
+        if ($forcedClassId !== null || $forcedPupilId !== null) return true;
+        if ($forcedClassCode !== null && trim($forcedClassCode) !== '') return true;
+        if ($forcedStudentLogin !== null && trim($forcedStudentLogin) !== '') return true;
+        if (tguard_req_int('class_id') !== null) return true;
+        if (($cc = tguard_req_str('class_code', 30)) !== null && $cc !== '') return true;
+        if (tguard_req_int('pupil_id') !== null) return true;
+        if (($sl = tguard_req_str('student_login', 80)) !== null && $sl !== '') return true;
         return false;
     }
 }
@@ -294,6 +330,10 @@ if (!function_exists('tguard_can_edit_own_class')) {
 // $tguard_allow_level2_own_class_edit = false;
 // $tguard_target_class_id = 123; // optional explicit scope for write checks
 // $tguard_target_class_code = '10-A'; // optional explicit scope for write checks
+// $tguard_target_pupil_id = 456; // optional explicit pupil scope (read-scope checks)
+// $tguard_target_student_login = 'student.login'; // optional explicit pupil login scope (read-scope checks)
+// $tguard_enforce_read_scope = false; // opt-in: restrict GET/HEAD by class/pupil scope for level2/3
+// $tguard_read_scope_levels = [2, 3];
 $tguard_allowed_methods = $tguard_allowed_methods ?? ['GET', 'HEAD'];
 $tguard_allowed_levels = tguard_normalize_levels((array)($tguard_allowed_levels ?? [1, 2, 3]));
 $tguard_require_active = $tguard_require_active ?? true;
@@ -303,6 +343,12 @@ $tguard_allow_level2_own_class_edit = tguard_truthy($tguard_allow_level2_own_cla
 $tguard_target_class_id = isset($tguard_target_class_id) ? (int)$tguard_target_class_id : null;
 $tguard_target_class_code = isset($tguard_target_class_code) ? trim((string)$tguard_target_class_code) : null;
 if ($tguard_target_class_code === '') $tguard_target_class_code = null;
+$tguard_target_pupil_id = isset($tguard_target_pupil_id) ? (int)$tguard_target_pupil_id : null;
+if ($tguard_target_pupil_id !== null && $tguard_target_pupil_id <= 0) $tguard_target_pupil_id = null;
+$tguard_target_student_login = isset($tguard_target_student_login) ? trim((string)$tguard_target_student_login) : null;
+if ($tguard_target_student_login === '') $tguard_target_student_login = null;
+$tguard_enforce_read_scope = tguard_truthy($tguard_enforce_read_scope ?? false);
+$tguard_read_scope_levels = tguard_normalize_levels((array)($tguard_read_scope_levels ?? [TGUARD_LEVEL_MEDIUM_TEACHER, TGUARD_LEVEL_TEACHER]));
 
 // Security / cache headers
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -343,6 +389,16 @@ try {
     $level = (int)($teacherRow['level'] ?? 0);
     if (!in_array($level, $tguard_allowed_levels, true)) {
         tguard_deny(403, 'Forbidden.');
+    }
+
+    if (tguard_is_read_method($method) && $tguard_enforce_read_scope && in_array($level, $tguard_read_scope_levels, true)) {
+        $hasScopeHint = tguard_request_has_scope_hint($tguard_target_class_id, $tguard_target_class_code, $tguard_target_pupil_id, $tguard_target_student_login);
+        if ($hasScopeHint) {
+            $inReadScope = tguard_match_medium_scope($pdo, $teacherRow, $tguard_target_class_id, $tguard_target_class_code, $tguard_target_pupil_id, $tguard_target_student_login);
+            if (!$inReadScope) {
+                tguard_deny(403, 'You can view only your own class data.');
+            }
+        }
     }
 
     if (!tguard_is_read_method($method)) {

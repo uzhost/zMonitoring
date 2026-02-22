@@ -1,68 +1,15 @@
 <?php
-// teacher/hisobot.php
+// teachers/p-hisobot.php
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/../inc/tauth.php';
-
-session_start_secure();
-require_role('viewer');
-
-/**
- * Baholash ranglari (max ballga nisbatan foiz):
- *  <46%  => qizil (past)
- *  <66%  => sariq (qoniqarli)
- *  <86%  => ko'k (yaxshi)
- * >=86%  => yashil (a'lo)
- */
-function score_badge_class(?float $score, int $maxPoints = 40): string
-{
-    if ($score === null) return 'text-bg-secondary-subtle border text-secondary-emphasis';
-    if ($maxPoints <= 0) $maxPoints = 40;
-
-    $pct = ($score / $maxPoints) * 100.0;
-    if ($pct < 46.0) return 'text-bg-danger';
-    if ($pct < 66.0) return 'text-bg-warning text-dark';
-    if ($pct < 86.0) return 'text-bg-primary';
-    return 'text-bg-success';
-}
-
-function diff_badge_class(?float $diff): string
-{
-    if ($diff === null) return 'text-bg-secondary-subtle border text-secondary-emphasis';
-    if ($diff > 0) return 'text-bg-success';
-    if ($diff < 0) return 'text-bg-danger';
-    return 'text-bg-secondary';
-}
-
-function diff_icon(?float $diff): string
-{
-    if ($diff === null) return '<span class="diff-icon text-muted" title="Ma&apos;lumot yo&apos;q">-</span>';
-    if ($diff > 0) return '<span class="diff-icon text-success" title="O&apos;sish">&#9650;</span>';
-    if ($diff < 0) return '<span class="diff-icon text-danger" title="Pasayish">&#9660;</span>';
-    return '<span class="diff-icon text-muted" title="O&apos;zgarishsiz">=</span>';
-}
-
-function fmt_score(?float $v): string
-{
-    if ($v === null) return '-';
-    $s = number_format($v, 2, '.', '');
-    return (str_ends_with($s, '.00')) ? substr($s, 0, -3) : rtrim(rtrim($s, '0'), '.');
-}
-
-function safe_int(mixed $v, int $default = 0): int
-{
-    if (is_int($v)) return $v;
-    if (is_string($v) && preg_match('/^\d+$/', $v)) return (int)$v;
-    return $default;
-}
-
-function exam_name_only(?array $e, int $fallbackId = 0): string
-{
-    if (!$e) return $fallbackId > 0 ? ('Imtihon #' . $fallbackId) : '-';
-    $name = trim((string)($e['exam_name'] ?? ''));
-    return $name !== '' ? $name : ('Imtihon #' . (int)($e['id'] ?? $fallbackId));
-}
+require_once __DIR__ . '/../inc/functions.php';
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/p-hisobot.php';
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 function calc_avgs(array $rows): array
 {
@@ -108,8 +55,8 @@ $defaultExam1 = isset($exams[1]) ? (int)$exams[1]['id'] : 0;
 // GET
 $classCode   = isset($_GET['class_code']) ? trim((string)$_GET['class_code']) : $defaultClass;
 $subjectPick = isset($_GET['subject_id']) ? trim((string)$_GET['subject_id']) : 'all';
-$exam1Id     = isset($_GET['exam1_id']) ? safe_int($_GET['exam1_id'], $defaultExam1) : $defaultExam1;
-$exam2Id     = isset($_GET['exam2_id']) ? safe_int($_GET['exam2_id'], $defaultExam2) : $defaultExam2;
+$exam1Id     = isset($_GET['exam1_id']) ? clamp_int((string)$_GET['exam1_id'], 0, max($defaultExam1, $defaultExam2, 999999)) : $defaultExam1;
+$exam2Id     = isset($_GET['exam2_id']) ? clamp_int((string)$_GET['exam2_id'], 0, max($defaultExam1, $defaultExam2, 999999)) : $defaultExam2;
 
 if ($classCode === '' || !in_array($classCode, $classCodes, true)) {
     $classCode = $defaultClass;
@@ -117,7 +64,7 @@ if ($classCode === '' || !in_array($classCode, $classCodes, true)) {
 
 $subjectId = null; // null => barcha fanlar
 if ($subjectPick !== 'all') {
-    $tmp = safe_int($subjectPick, 0);
+    $tmp = clamp_int($subjectPick, 0, 999999);
     $subjectId = $tmp > 0 ? $tmp : null;
 }
 
@@ -129,8 +76,8 @@ if ($exam1Id > 0 && $exam2Id > 0 && $exam1Id === $exam2Id) {
 $examById = [];
 foreach ($exams as $e) $examById[(int)$e['id']] = $e;
 
-$exam1Name = exam_name_only($exam1Id > 0 ? ($examById[$exam1Id] ?? null) : null, $exam1Id);
-$exam2Name = exam_name_only($exam2Id > 0 ? ($examById[$exam2Id] ?? null) : null, $exam2Id);
+$exam1Name = label_exam_name_only($exam1Id > 0 ? ($examById[$exam1Id] ?? null) : null, $exam1Id);
+$exam2Name = label_exam_name_only($exam2Id > 0 ? ($examById[$exam2Id] ?? null) : null, $exam2Id);
 
 /* -----------------------------
    FULL CLASS (guruhga ajratmasdan)
@@ -241,6 +188,7 @@ $report_meta = [
     '2-imtihon' => $exam2Name,
 ];
 
+$auth_required = false; // page is already protected via _tguard.php
 require __DIR__ . '/p-header.php';
 ?>
 
@@ -314,15 +262,18 @@ require __DIR__ . '/p-header.php';
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-width: 3.5rem;
+    min-width: 3.0rem;
     height: 1.85rem;
     font-size: 0.95rem;
     line-height: 1;
     font-weight: 800;
-    border-radius: 999px !important;
-    padding: 0 .7rem !important;
+    border-radius: .35rem;
+    padding: 0 .35rem;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
   }
-
   .summary-pills{
     display:flex;
     flex-wrap:wrap;
@@ -362,7 +313,7 @@ require __DIR__ . '/p-header.php';
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-width: 3.5rem;     /* .score-pill bilan bir xil */
+    min-width: 3.0rem;     /* .score-pill bilan bir xil */
     height: 1.90rem;       /* ekran uchun optik barqarorlik */
     font-weight: 800;
   }
@@ -389,14 +340,27 @@ require __DIR__ . '/p-header.php';
     display:inline-flex;
     align-items:center;
     justify-content:center;
-    min-width: 4.4rem;
+    min-width: 3.9rem;
     height: 1.90rem;
     font-size: 0.95rem;
     line-height: 1;
     font-weight: 800;
-    border-radius: 999px !important;
-    padding: 0 .8rem !important;
+    border-radius: .35rem;
+    padding: 0 .3rem;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
   }
+  /* Rendered coloured text style (print-friendly, no filled badge blocks) */
+  .score-pill.text-bg-danger, .diff-pill.text-bg-danger { color: #dc2626 !important; }
+  .score-pill.text-bg-warning, .diff-pill.text-bg-warning { color: #a16207 !important; }
+  .score-pill.text-bg-primary, .diff-pill.text-bg-primary { color: #1d4ed8 !important; }
+  .score-pill.text-bg-success, .diff-pill.text-bg-success { color: #15803d !important; }
+  .score-pill.text-bg-secondary, .diff-pill.text-bg-secondary { color: #475569 !important; }
+  .score-pill.text-bg-secondary-subtle, .diff-pill.text-bg-secondary-subtle { color: #64748b !important; }
+  .score-pill.border, .diff-pill.border,
+  .score-pill.text-secondary-emphasis, .diff-pill.text-secondary-emphasis { border: none !important; }
 
   .table-hover tbody tr:hover{
     background: rgba(13,110,253,.04);
@@ -431,9 +395,12 @@ require __DIR__ . '/p-header.php';
     .card, .subject-card {
       box-shadow: none !important;
       border: 1px solid rgba(0,0,0,.35) !important;
-      border-radius: 10px !important;
+      border-radius: 0 !important;
     }
-    .card-header { background: #fff !important; }
+    .card-header {
+      background: #fff !important;
+      border-radius: 0 !important;
+    }
 
     .compare-table { border-collapse: collapse !important; }
     .compare-table th, .compare-table td {
@@ -472,7 +439,7 @@ require __DIR__ . '/p-header.php';
   }
   .name-col { width: 46% !important; min-width: 220px !important; }
   .score-col, .diff-col { width: 18% !important; }
-  .score-pill, .diff-pill, .avg-num { min-width: 4.2rem; }
+  .score-pill, .diff-pill, .avg-num { min-width: 3.7rem; }
 
   @media print {
     body {
@@ -490,15 +457,17 @@ require __DIR__ . '/p-header.php';
       max-width: none !important;
     }
     .pupil-cell{ padding-left: .75rem !important; }
+    .pupil-name{ font-size: 1.1em !important; line-height: 1.2 !important; }
     .subject-card {
       margin-bottom: 5mm !important;
-      border-radius: 8px !important;
+      border-radius: 0 !important;
       break-inside: avoid-page !important;
     }
     .subject-header {
       background: #fff !important;
       padding: 6px 8px !important;
       border-bottom: 1px solid rgba(0, 0, 0, .25) !important;
+      border-radius: 0 !important;
     }
     .subject-card .card-body { padding: 6px !important; }
     .table-responsive {
@@ -527,7 +496,7 @@ require __DIR__ . '/p-header.php';
     .score-pill,
     .diff-pill,
     .avg-num {
-      min-width: 3.2rem !important;
+      min-width: 2.9rem !important;
       height: auto !important;
       font-size: .8rem !important;
       border: none !important;
@@ -602,6 +571,9 @@ require __DIR__ . '/p-header.php';
       height: 0 !important;
       margin: 0 !important;
     }
+    .page-break + .subject-card {
+      margin-top: 6mm !important;
+    }
   }
 </style>
 
@@ -633,7 +605,7 @@ require __DIR__ . '/p-header.php';
   <!-- FILTRLAR -->
   <div class="card shadow-sm mb-3 no-print">
     <div class="card-body">
-      <form class="row g-2 align-items-end" method="get" action="/teacher/p-hisobot.php">
+      <form class="row g-2 align-items-end" method="get" action="p-hisobot.php">
 
         <div class="col-12 col-md-3">
           <label class="form-label mb-1">Sinf</label>
@@ -664,7 +636,7 @@ require __DIR__ . '/p-header.php';
             <?php foreach ($exams as $e): ?>
               <?php $id = (int)$e['id']; ?>
               <option value="<?= $id ?>"<?= ($id === $exam1Id) ? ' selected' : '' ?>>
-                <?= h(exam_name_only($e, $id)) ?>
+                <?= h(label_exam_name_only($e, $id)) ?>
               </option>
             <?php endforeach; ?>
           </select>
@@ -677,7 +649,7 @@ require __DIR__ . '/p-header.php';
             <?php foreach ($exams as $e): ?>
               <?php $id = (int)$e['id']; ?>
               <option value="<?= $id ?>"<?= ($id === $exam2Id) ? ' selected' : '' ?>>
-                <?= h(exam_name_only($e, $id)) ?>
+                <?= h(label_exam_name_only($e, $id)) ?>
               </option>
             <?php endforeach; ?>
           </select>
@@ -687,7 +659,7 @@ require __DIR__ . '/p-header.php';
           <button class="btn btn-primary">
             <i class="bi bi-funnel me-1"></i>Qo'llash
           </button>
-          <a class="btn btn-outline-secondary" href="/teacher/p-hisobot.php">
+          <a class="btn btn-outline-secondary" href="p-hisobot.php">
             <i class="bi bi-arrow-counterclockwise me-1"></i>Qayta tiklash
           </a>
 
@@ -719,7 +691,7 @@ require __DIR__ . '/p-header.php';
         $rows = fetch_class_rows($stmtClass, $classCode, $sid, $exam1Id, $exam2Id);
         $avgs = calc_avgs($rows);
 
-        $avgDiffStr = ($avgs['avgd'] === null) ? '-' : (($avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$avgs['avgd']));
+        $avgDiffStr = ($avgs['avgd'] === null) ? '-' : (($avgs['avgd'] > 0 ? '+' : '') . format_decimal_trimmed((float)$avgs['avgd']));
         $avgDiffDir = 'flat';
         $avgDiffIcon = '=';
         if ($avgs['avgd'] !== null) {
@@ -742,8 +714,8 @@ require __DIR__ . '/p-header.php';
         </div>
         <div class="print-kpi mt-1">
           O'quvchilar soni: <span class="fw-semibold"><?= (int)$avgs['n'] ?></span>.
-          O'rtacha ball: <?= h($exam1Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg1'])) ?></span>,
-          <?= h($exam2Name) ?> - <span class="fw-semibold"><?= h(fmt_score($avgs['avg2'])) ?></span>,
+          O'rtacha ball: <?= h($exam1Name) ?> - <span class="fw-semibold"><?= h(format_decimal_trimmed($avgs['avg1'])) ?></span>,
+          <?= h($exam2Name) ?> - <span class="fw-semibold"><?= h(format_decimal_trimmed($avgs['avg2'])) ?></span>,
           Farq - <span class="fw-semibold"><?= h($avgDiffStr) ?></span>.
         </div>
         <hr class="my-2">
@@ -761,11 +733,11 @@ require __DIR__ . '/p-header.php';
           <div class="summary-pills">
             <span class="summary-pill mono">
               <span class="sum-label"><?= h($exam1Name) ?>:</span>
-              <span class="sum-value"><?= h(fmt_score($avgs['avg1'])) ?></span>
+              <span class="sum-value"><?= h(format_decimal_trimmed($avgs['avg1'])) ?></span>
             </span>
             <span class="summary-pill mono">
               <span class="sum-label"><?= h($exam2Name) ?>:</span>
-              <span class="sum-value"><?= h(fmt_score($avgs['avg2'])) ?></span>
+              <span class="sum-value"><?= h(format_decimal_trimmed($avgs['avg2'])) ?></span>
             </span>
             <span class="summary-pill mono diff-<?= h($avgDiffDir) ?>">
               <span class="sum-label">Farq:</span>
@@ -776,7 +748,7 @@ require __DIR__ . '/p-header.php';
         </div>
 
         <div class="card-body">
-          <div class="table-responsive border rounded-3 bg-white">
+          <div class="table-responsive border bg-white">
             <table class="table table-sm table-hover align-middle mb-0 sticky-head compare-table">
               <thead>
                 <tr>
@@ -806,22 +778,22 @@ require __DIR__ . '/p-header.php';
                       </td>
 
                       <td class="mono score-cell">
-                        <span class="badge score-pill <?= h_attr(score_badge_class($s1, $maxPoints)) ?> mono">
-                          <?= h(fmt_score($s1)) ?>
+                        <span class="score-pill <?= h_attr(badge_score_by_percent_of_max($s1, $maxPoints)) ?> mono">
+                          <?= h(format_decimal_trimmed($s1)) ?>
                         </span>
                       </td>
 
                       <td class="mono score-cell">
-                        <span class="badge score-pill <?= h_attr(score_badge_class($s2, $maxPoints)) ?> mono">
-                          <?= h(fmt_score($s2)) ?>
+                        <span class="score-pill <?= h_attr(badge_score_by_percent_of_max($s2, $maxPoints)) ?> mono">
+                          <?= h(format_decimal_trimmed($s2)) ?>
                         </span>
                       </td>
 
                       <td class="mono diff-cell">
                         <span class="diff-wrap">
-                          <?= diff_icon($diff) ?>
-                          <span class="badge diff-pill <?= h_attr(diff_badge_class($diff)) ?> mono">
-                            <?= $diff === null ? '-' : h(($diff > 0 ? '+' : '') . fmt_score($diff)) ?>
+                          <?= render_delta_direction_icon($diff) ?>
+                          <span class="diff-pill <?= h_attr(badge_delta_change_class($diff)) ?> mono">
+                            <?= $diff === null ? '-' : h(($diff > 0 ? '+' : '') . format_decimal_trimmed($diff)) ?>
                           </span>
                         </span>
                       </td>
@@ -833,15 +805,15 @@ require __DIR__ . '/p-header.php';
                     
                     <td class="fw-semibold text-center">O'rtacha ko'rsatkich</td>
                     <td class="mono fw-semibold score-cell text-center">
-                      <span class="avg-num mono"><?= h(fmt_score($avgs['avg1'])) ?></span>
+                      <span class="avg-num mono"><?= h(format_decimal_trimmed($avgs['avg1'])) ?></span>
                     </td>
                     <td class="mono fw-semibold score-cell text-center">
-                      <span class="avg-num mono"><?= h(fmt_score($avgs['avg2'])) ?></span>
+                      <span class="avg-num mono"><?= h(format_decimal_trimmed($avgs['avg2'])) ?></span>
                     </td>
                     <td class="mono fw-semibold diff-cell text-center">
                       <span class="diff-wrap justify-content-center">
-                        <?= diff_icon($avgs['avgd']) ?>
-                        <span class="badge diff-pill <?= h_attr(diff_badge_class($avgs['avgd'])) ?> mono">
+                        <?= render_delta_direction_icon($avgs['avgd']) ?>
+                        <span class="diff-pill <?= h_attr(badge_delta_change_class($avgs['avgd'])) ?> mono">
                           <?= h($avgDiffStr) ?>
                         </span>
                       </span>

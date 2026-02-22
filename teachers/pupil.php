@@ -4,7 +4,16 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/_guard.php';
+require_once __DIR__ . '/../inc/functions.php';
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/pupil.php';
+$tguard_enforce_read_scope = true;
+$tguard_target_pupil_id = (isset($_GET['id']) && preg_match('/^\d+$/', (string)$_GET['id'])) ? (int)$_GET['id'] : null;
+$tguard_target_student_login = isset($_GET['student_login']) ? trim((string)$_GET['student_login']) : null;
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 const PASS_SCORE = 18.4;
 const GOOD_SCORE = 26.4;
@@ -25,22 +34,6 @@ function qstr(string $key, int $maxLen = 80): string
     $v = trim((string)($_GET[$key] ?? ''));
     if ($v === '') return '';
     return mb_substr($v, 0, $maxLen, 'UTF-8');
-}
-
-function score_badge(float $score): string
-{
-    if ($score < PASS_SCORE) return 'text-bg-danger';
-    if ($score < GOOD_SCORE) return 'text-bg-warning text-dark';
-    if ($score < EXCELLENT_SCORE) return 'text-bg-primary';
-    return 'text-bg-success';
-}
-
-function delta_badge(?float $delta): array
-{
-    if ($delta === null) return ['cls' => 'text-bg-secondary', 'txt' => '-', 'ic' => 'bi-dash'];
-    if ($delta > 0.00001) return ['cls' => 'text-bg-success', 'txt' => '+' . number_format($delta, 2), 'ic' => 'bi-arrow-up-right'];
-    if ($delta < -0.00001) return ['cls' => 'text-bg-danger', 'txt' => number_format($delta, 2), 'ic' => 'bi-arrow-down-right'];
-    return ['cls' => 'text-bg-secondary', 'txt' => '0.00', 'ic' => 'bi-dash'];
 }
 
 function exam_label(array $e): string
@@ -267,7 +260,7 @@ if ($pupil) {
             $r['delta'] = $delta;
             $r['prev_score'] = $prev;
             $r['pct'] = $pct;
-            $r['band'] = score_badge($score);
+            $r['band'] = badge_score_by_threshold($score, PASS_SCORE, GOOD_SCORE, EXCELLENT_SCORE);
             if ($score >= PASS_SCORE) $passCount++;
         }
         unset($r);
@@ -626,8 +619,8 @@ require_once __DIR__ . '/header.php';
     <?php
       $fullName = trim((string)$pupil['surname'] . ' ' . (string)$pupil['name'] . ' ' . (string)($pupil['middle_name'] ?? ''));
       $selectedExamLabel = $selectedExam ? exam_label($selectedExam) : 'No exam selected';
-      $deltaTotalBadge = delta_badge($deltaTotal);
-      $deltaAvgBadge = delta_badge($deltaAvg);
+      $deltaTotalBadge = badge_delta($deltaTotal);
+      $deltaAvgBadge = badge_delta($deltaAvg);
       $passRatePct = $passRate === null ? null : ($passRate * 100.0);
       $passRateBadgeClass = 'text-bg-secondary';
       $passRateBadgeText = 'No data';
@@ -819,7 +812,7 @@ require_once __DIR__ . '/header.php';
                   </thead>
                   <tbody>
                     <?php foreach ($subjectRows as $r): ?>
-                      <?php $db = delta_badge(isset($r['delta']) ? (float)$r['delta'] : null); ?>
+                      <?php $db = badge_delta(isset($r['delta']) ? (float)$r['delta'] : null); ?>
                       <?php $pctVal = isset($r['pct']) ? max(0.0, min(100.0, (float)$r['pct'])) : null; ?>
                       <tr>
                         <td class="subject-cell text-truncate">

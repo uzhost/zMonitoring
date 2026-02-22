@@ -1,5 +1,5 @@
 <?php
-// teacher/p-footer.php  Print-first report footer
+// teachers/p-footer.php  Print-first report footer
 declare(strict_types=1);
 
 // Note: this file assumes it is included after p-header.php in the same request,

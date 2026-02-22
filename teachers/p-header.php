@@ -2,7 +2,7 @@
 // teacher/p-header.php  Print-first report header (Bootstrap 5.3.8 CDN), no portal chrome
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/tauth.php';
 
 session_start_secure();
 
@@ -38,13 +38,13 @@ function uz_fix(string $text): string
 // Optional: report pages should still be protected unless explicitly disabled
 $auth_required = $auth_required ?? true;
 if ($auth_required) {
-    // Teacher portal is level-3 view; prefer your helper if it exists
+    // Teacher portal guard (levels 1/2/3)
     if (function_exists('require_teacher')) {
         require_teacher();
     } else {
-        if (function_exists('admin_id') && admin_id() <= 0) {
-            $to = (string)($_SERVER['REQUEST_URI'] ?? '/teacher/dashboard.php');
-            header('Location: /teacher/login.php?next=' . rawurlencode($to));
+        if (function_exists('teacher_id') && teacher_id() <= 0) {
+            $to = (string)($_SERVER['REQUEST_URI'] ?? '/teachers/dashboard.php');
+            header('Location: /teachers/login.php?next=' . rawurlencode($to));
             exit;
         }
     }

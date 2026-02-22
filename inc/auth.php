@@ -1,11 +1,6 @@
 <?php
-// inc/auth.php — Admin auth helpers (admins table), hardened sessions + CSRF + RBAC(levels) + safe escaping
-// DROP-IN ENHANCEMENT (FIXED):
-// - Removes duplicate require_admin_levels() (previously declared twice)
-// - Makes admin_level() tolerant to legacy session shapes
-// - Lets admin_login_session() persist level (optional param, backwards compatible)
-// - Keeps role-based helpers for backward compatibility
-// - Keeps teacher-aware redirect helpers to avoid /teacher -> /admin/login.php loops
+// inc/auth.php - Shared auth helpers with separated admin and teacher session APIs.
+// Backward compatible with legacy admin_* usage while providing teacher_* first-class helpers.
 
 declare(strict_types=1);
 
@@ -19,10 +14,14 @@ const AUTH_BIND_UA         = true;
 
 const AUTH_TRUSTED_PROXIES = ['127.0.0.1', '::1'];
 
-// Define level semantics (authoritative)
-const AUTH_LEVEL_SUPERADMIN = 1; // full edit
-const AUTH_LEVEL_ADMIN      = 2; // admin (view-only or limited, depending on page)
-const AUTH_LEVEL_TEACHER    = 3; // viewer/teacher (read-only)
+const AUTH_ADMIN_BASE          = '/admin';
+const AUTH_TEACHER_BASE        = '/teachers';
+const AUTH_TEACHER_BASE_LEGACY = '/teacher';
+
+// Level semantics
+const AUTH_LEVEL_SUPERADMIN = 1; // Super Teacher / Super Admin
+const AUTH_LEVEL_ADMIN      = 2; // Medium Teacher / Admin
+const AUTH_LEVEL_TEACHER    = 3; // Read-only Teacher / Viewer
 
 // ------------------------------------------------------------
 // Session (hardened)
@@ -79,7 +78,7 @@ function session_start_secure(): void
         if (empty($_SESSION['_ua_hash'])) {
             $_SESSION['_ua_hash'] = $uaHash;
         } elseif (is_string($_SESSION['_ua_hash']) && !hash_equals($_SESSION['_ua_hash'], $uaHash)) {
-            admin_logout_session();
+            auth_logout_session_all();
             http_response_code(401);
             echo 'Session invalid.';
             exit;
@@ -96,12 +95,21 @@ function session_start_secure(): void
     _auth_session_runtime_checks();
 }
 
+function _auth_has_identity(): bool
+{
+    if (!empty($_SESSION['admin_id'])) return true;
+    if (!empty($_SESSION['teacher_id'])) return true;
+    if (isset($_SESSION['admin']) && is_array($_SESSION['admin']) && !empty($_SESSION['admin']['id'])) return true;
+    if (isset($_SESSION['teacher']) && is_array($_SESSION['teacher']) && !empty($_SESSION['teacher']['id'])) return true;
+    return false;
+}
+
 function _auth_session_runtime_checks(): void
 {
     if (AUTH_IDLE_TIMEOUT > 0 && isset($_SESSION['_last_seen']) && is_int($_SESSION['_last_seen'])) {
         $idle = time() - $_SESSION['_last_seen'];
         if ($idle > AUTH_IDLE_TIMEOUT) {
-            admin_logout_session();
+            auth_logout_session_all();
             http_response_code(401);
             echo 'Session expired.';
             exit;
@@ -109,7 +117,7 @@ function _auth_session_runtime_checks(): void
     }
     $_SESSION['_last_seen'] = time();
 
-    if (AUTH_ROTATE_INTERVAL > 0 && !empty($_SESSION['admin_id'])) {
+    if (AUTH_ROTATE_INTERVAL > 0 && _auth_has_identity()) {
         $rot = (int)($_SESSION['_last_rot'] ?? 0);
         if ($rot <= 0) {
             $_SESSION['_last_rot'] = time();
@@ -204,7 +212,7 @@ function h_attr(mixed $s): string
 }
 
 // ------------------------------------------------------------
-// Auth getters (tolerant shapes)
+// Admin session getters
 // ------------------------------------------------------------
 
 function admin_id(): int
@@ -227,22 +235,13 @@ function admin_login(): string
     return is_string($l) ? $l : '';
 }
 
-/**
- * Return admin access level (tolerant).
- * 1 = Superadmin
- * 2 = Admin
- * 3 = Teacher/Viewer
- */
 function admin_level(): int
 {
     session_start_secure();
 
-    // Preferred (new)
     if (isset($_SESSION['admin']) && is_array($_SESSION['admin']) && isset($_SESSION['admin']['level'])) {
         return (int)$_SESSION['admin']['level'];
     }
-
-    // Legacy mirrors / tolerant
     if (isset($_SESSION['admin_level'])) return (int)$_SESSION['admin_level'];
     if (isset($_SESSION['level'])) return (int)$_SESSION['level'];
 
@@ -250,7 +249,48 @@ function admin_level(): int
 }
 
 // ------------------------------------------------------------
-// Safe "next" URL helper (avoid open redirects)
+// Teacher session getters
+// ------------------------------------------------------------
+
+function teacher_id(): int
+{
+    session_start_secure();
+    return (int)($_SESSION['teacher_id'] ?? ($_SESSION['teacher']['id'] ?? 0));
+}
+
+function teacher_login(): string
+{
+    session_start_secure();
+    $l = $_SESSION['teacher_login'] ?? ($_SESSION['teacher']['login'] ?? '');
+    return is_string($l) ? $l : '';
+}
+
+function teacher_level(): int
+{
+    session_start_secure();
+
+    if (isset($_SESSION['teacher']) && is_array($_SESSION['teacher']) && isset($_SESSION['teacher']['level'])) {
+        return (int)$_SESSION['teacher']['level'];
+    }
+    if (isset($_SESSION['teacher_level'])) return (int)$_SESSION['teacher_level'];
+
+    return 0;
+}
+
+function teacher_class_id(): int
+{
+    session_start_secure();
+
+    if (isset($_SESSION['teacher']) && is_array($_SESSION['teacher']) && isset($_SESSION['teacher']['class_id'])) {
+        return (int)$_SESSION['teacher']['class_id'];
+    }
+    if (isset($_SESSION['teacher_class_id'])) return (int)$_SESSION['teacher_class_id'];
+
+    return 0;
+}
+
+// ------------------------------------------------------------
+// Safe "next" URL helpers (avoid open redirects)
 // ------------------------------------------------------------
 
 function safe_next_url(string $candidate, string $fallback = '/admin/dashboard.php'): string
@@ -269,21 +309,25 @@ function safe_next_url(string $candidate, string $fallback = '/admin/dashboard.p
     return $candidate;
 }
 
-/**
- * Teacher-safe next helper (defaults to teacher dashboard)
- */
-function safe_next_path_teacher(string $candidate, string $fallback = '/teacher/dashboard.php'): string
+function safe_next_path_teacher(string $candidate, string $fallback = '/teachers/dashboard.php'): string
 {
     $candidate = trim($candidate);
     if ($candidate === '') return $fallback;
 
     $parts = parse_url($candidate);
-    $path  = $parts['path']  ?? '';
-    $query = isset($parts['query']) ? ('?' . $parts['query']) : '';
+    $path  = (string)($parts['path'] ?? '');
+    $query = isset($parts['query']) ? ('?' . (string)$parts['query']) : '';
 
     if ($path === '' || $path[0] !== '/') return $fallback;
 
-    if (preg_match('#^/teacher/login\.php(?:$|[/?#])#', $path)) {
+    $inTeachersArea = str_starts_with($path, AUTH_TEACHER_BASE . '/')
+        || $path === AUTH_TEACHER_BASE
+        || str_starts_with($path, AUTH_TEACHER_BASE_LEGACY . '/')
+        || $path === AUTH_TEACHER_BASE_LEGACY;
+
+    if (!$inTeachersArea) return $fallback;
+
+    if (preg_match('#^/(teachers|teacher)/(login|logout)\.php(?:$|[/?#])#', $path)) {
         return $fallback;
     }
 
@@ -308,20 +352,16 @@ function require_admin_login(): void
 
 function require_teacher_login(): void
 {
-    $to = (string)($_SERVER['REQUEST_URI'] ?? '/teacher/dashboard.php');
-    $to = safe_next_path_teacher($to, '/teacher/dashboard.php');
-    header('Location: /teacher/login.php?next=' . rawurlencode($to));
+    $to = (string)($_SERVER['REQUEST_URI'] ?? '/teachers/dashboard.php');
+    $to = safe_next_path_teacher($to, '/teachers/dashboard.php');
+    header('Location: /teachers/login.php?next=' . rawurlencode($to));
     exit;
 }
 
 // ------------------------------------------------------------
-// RBAC (Role-based kept; Level-based added)
+// RBAC
 // ------------------------------------------------------------
 
-/**
- * Require login for admin area.
- * Backwards compatible: redirects to /admin/login.php.
- */
 function require_admin(): void
 {
     session_start_secure();
@@ -331,10 +371,6 @@ function require_admin(): void
     }
 }
 
-/**
- * Require login and specific admin levels.
- * Example: require_admin_levels([1,2]) for admin pages.
- */
 function require_admin_levels(array $levels): void
 {
     require_admin();
@@ -351,37 +387,38 @@ function require_admin_levels(array $levels): void
     exit;
 }
 
-/**
- * Editing permission (only level 1).
- * Use in pages: $can_edit = can_edit();
- */
 function can_edit(): bool
 {
     return admin_level() === AUTH_LEVEL_SUPERADMIN;
 }
 
-/**
- * Teacher area guard (Level 3 only). Redirects to /teacher/login.php.
- * Use on teacher pages (except teacher/login.php).
- */
 function require_teacher(): void
+{
+    require_teacher_levels([AUTH_LEVEL_SUPERADMIN, AUTH_LEVEL_ADMIN, AUTH_LEVEL_TEACHER]);
+}
+
+function require_teacher_levels(array $levels): void
 {
     session_start_secure();
 
-    if (admin_id() <= 0) {
+    if (teacher_id() <= 0) {
         require_teacher_login();
     }
 
-    if (admin_level() !== AUTH_LEVEL_TEACHER) {
-        http_response_code(403);
-        echo 'Forbidden.';
-        exit;
+    $cur = teacher_level();
+    foreach ($levels as $lvl) {
+        if ((int)$lvl === $cur) {
+            return;
+        }
     }
+
+    http_response_code(403);
+    echo 'Forbidden.';
+    exit;
 }
 
 /**
- * Require role (legacy, string RBAC).
- * Order of privilege: superadmin > admin > viewer
+ * Legacy role guard for admin area.
  */
 function require_role(string $minRole): void
 {
@@ -408,11 +445,17 @@ function require_role(string $minRole): void
 // Login/Logout helpers
 // ------------------------------------------------------------
 
+function _auth_role_for_level(int $level): string
+{
+    return match ($level) {
+        AUTH_LEVEL_SUPERADMIN => 'superadmin',
+        AUTH_LEVEL_ADMIN => 'admin',
+        default => 'viewer',
+    };
+}
+
 /**
- * Call immediately after successful authentication.
- * Backwards compatible signature.
- *
- * New optional parameter: $level (admins.level).
+ * Admin login session bootstrap.
  */
 function admin_login_session(int $id, string $role, string $login, ?int $level = null): void
 {
@@ -422,7 +465,6 @@ function admin_login_session(int $id, string $role, string $login, ?int $level =
     $_SESSION['admin_role']  = $role;
     $_SESSION['admin_login'] = $login;
 
-    // Mirror into tolerant structure
     if (!isset($_SESSION['admin']) || !is_array($_SESSION['admin'])) {
         $_SESSION['admin'] = [];
     }
@@ -430,17 +472,96 @@ function admin_login_session(int $id, string $role, string $login, ?int $level =
     $_SESSION['admin']['role']  = $role;
     $_SESSION['admin']['login'] = $login;
 
-    // Persist level consistently (new + legacy mirrors)
     if ($level !== null) {
         $lvl = (int)$level;
         $_SESSION['admin']['level'] = $lvl;
-        $_SESSION['admin_level']    = $lvl; // legacy mirror
-        $_SESSION['level']          = $lvl; // legacy mirror
+        $_SESSION['admin_level']    = $lvl;
+        $_SESSION['level']          = $lvl;
     }
 
     csrf_token();
     session_regenerate_id(true);
 
+    $_SESSION['_last_seen'] = time();
+    $_SESSION['_last_rot']  = time();
+}
+
+/**
+ * Teacher login session bootstrap.
+ *
+ * By default mirrors admin_* keys for backward compatibility with old teacher pages.
+ */
+function teacher_login_session(
+    int $id,
+    string $login,
+    int $level = AUTH_LEVEL_TEACHER,
+    ?int $classId = null,
+    string $fullName = '',
+    string $shortName = '',
+    bool $mirrorAdmin = true
+): void {
+    session_start_secure();
+
+    $lvl = (int)$level;
+    if (!in_array($lvl, [AUTH_LEVEL_SUPERADMIN, AUTH_LEVEL_ADMIN, AUTH_LEVEL_TEACHER], true)) {
+        $lvl = AUTH_LEVEL_TEACHER;
+    }
+
+    $_SESSION['teacher_id'] = $id;
+    $_SESSION['teacher_login'] = $login;
+    $_SESSION['teacher_level'] = $lvl;
+    $_SESSION['teacher_class_id'] = $classId ?? 0;
+
+    if (!isset($_SESSION['teacher']) || !is_array($_SESSION['teacher'])) {
+        $_SESSION['teacher'] = [];
+    }
+    $_SESSION['teacher']['id'] = $id;
+    $_SESSION['teacher']['login'] = $login;
+    $_SESSION['teacher']['level'] = $lvl;
+    $_SESSION['teacher']['class_id'] = $classId ?? 0;
+    $_SESSION['teacher']['full_name'] = $fullName;
+    $_SESSION['teacher']['short_name'] = $shortName;
+
+    if ($mirrorAdmin) {
+        $role = _auth_role_for_level($lvl);
+        $_SESSION['admin_id'] = $id;
+        $_SESSION['admin_login'] = $login;
+        $_SESSION['admin_role'] = $role;
+        $_SESSION['admin_level'] = $lvl;
+        $_SESSION['level'] = $lvl;
+
+        if (!isset($_SESSION['admin']) || !is_array($_SESSION['admin'])) {
+            $_SESSION['admin'] = [];
+        }
+        $_SESSION['admin']['id'] = $id;
+        $_SESSION['admin']['login'] = $login;
+        $_SESSION['admin']['role'] = $role;
+        $_SESSION['admin']['level'] = $lvl;
+    }
+
+    csrf_token();
+    session_regenerate_id(true);
+
+    $_SESSION['_last_seen'] = time();
+    $_SESSION['_last_rot']  = time();
+}
+
+function teacher_logout_session(bool $clearLegacyMirrors = true): void
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start_secure();
+    }
+
+    unset($_SESSION['teacher']);
+    unset($_SESSION['teacher_id'], $_SESSION['teacher_login'], $_SESSION['teacher_level'], $_SESSION['teacher_class_id']);
+
+    if ($clearLegacyMirrors) {
+        unset($_SESSION['admin']);
+        unset($_SESSION['admin_id'], $_SESSION['admin_login'], $_SESSION['admin_role'], $_SESSION['admin_level'], $_SESSION['level']);
+    }
+
+    csrf_token();
+    session_regenerate_id(true);
     $_SESSION['_last_seen'] = time();
     $_SESSION['_last_rot']  = time();
 }
@@ -466,4 +587,9 @@ function admin_logout_session(): void
     }
 
     session_destroy();
+}
+
+function auth_logout_session_all(): void
+{
+    admin_logout_session();
 }

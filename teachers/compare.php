@@ -2,66 +2,14 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/../inc/auth.php';
-
-session_start_secure();
-require_role('viewer');
-
-/**
- * Highlight rule (percent of max points):
- *  <46%  => danger
- *  <66%  => warning
- *  <86%  => primary
- * >=86%  => success
- */
-function score_badge_class(?float $score, int $maxPoints = 40): string
-{
-    if ($score === null) return 'text-bg-secondary-subtle border text-secondary-emphasis';
-    if ($maxPoints <= 0) $maxPoints = 40;
-
-    $pct = ($score / $maxPoints) * 100.0;
-    if ($pct < 46.0) return 'text-bg-danger';
-    if ($pct < 66.0) return 'text-bg-warning text-dark';
-    if ($pct < 86.0) return 'text-bg-primary';
-    return 'text-bg-success';
-}
-
-function diff_badge_class(?float $diff): string
-{
-    if ($diff === null) return 'text-bg-secondary-subtle border text-secondary-emphasis';
-    if ($diff > 0) return 'text-bg-success';
-    if ($diff < 0) return 'text-bg-danger';
-    return 'text-bg-secondary';
-}
-
-function diff_icon(?float $diff): string
-{
-    if ($diff === null) return '<span class="diff-icon text-muted" title="No data">—</span>';
-    if ($diff > 0) return '<span class="diff-icon text-success" title="Increase">▲</span>';
-    if ($diff < 0) return '<span class="diff-icon text-danger" title="Decrease">▼</span>';
-    return '<span class="diff-icon text-muted" title="No change">→</span>';
-}
-
-function fmt_score(?float $v): string
-{
-    if ($v === null) return '—';
-    $s = number_format($v, 2, '.', '');
-    return (str_ends_with($s, '.00')) ? substr($s, 0, -3) : rtrim(rtrim($s, '0'), '.');
-}
-
-function safe_int(mixed $v, int $default = 0): int
-{
-    if (is_int($v)) return $v;
-    if (is_string($v) && preg_match('/^\d+$/', $v)) return (int)$v;
-    return $default;
-}
-
-function exam_name_only(?array $e, int $fallbackId = 0): string
-{
-    if (!$e) return $fallbackId > 0 ? ('Exam #' . $fallbackId) : '—';
-    $name = trim((string)($e['exam_name'] ?? ''));
-    return $name !== '' ? $name : ('Exam #' . (int)($e['id'] ?? $fallbackId));
-}
+require_once __DIR__ . '/../inc/functions.php';
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_allowed_levels = [1, 2, 3];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/compare.php';
+$tguard_enforce_read_scope = true;
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
 /* -----------------------------
    Load filter options
@@ -81,8 +29,8 @@ $defaultExam1 = isset($exams[1]) ? (int)$exams[1]['id'] : 0;
 // Read GET
 $classCode   = isset($_GET['class_code']) ? trim((string)$_GET['class_code']) : $defaultClass;
 $subjectPick = isset($_GET['subject_id']) ? trim((string)$_GET['subject_id']) : 'all';
-$exam1Id     = isset($_GET['exam1_id']) ? safe_int($_GET['exam1_id'], $defaultExam1) : $defaultExam1;
-$exam2Id     = isset($_GET['exam2_id']) ? safe_int($_GET['exam2_id'], $defaultExam2) : $defaultExam2;
+$exam1Id     = isset($_GET['exam1_id']) ? clamp_int((string)$_GET['exam1_id'], 0, max($defaultExam1, $defaultExam2, 999999)) : $defaultExam1;
+$exam2Id     = isset($_GET['exam2_id']) ? clamp_int((string)$_GET['exam2_id'], 0, max($defaultExam1, $defaultExam2, 999999)) : $defaultExam2;
 
 if ($classCode === '' || !in_array($classCode, $classCodes, true)) {
     $classCode = $defaultClass;
@@ -90,7 +38,7 @@ if ($classCode === '' || !in_array($classCode, $classCodes, true)) {
 
 $subjectId = null; // null => all
 if ($subjectPick !== 'all') {
-    $tmp = safe_int($subjectPick, 0);
+    $tmp = clamp_int($subjectPick, 0, 999999);
     $subjectId = $tmp > 0 ? $tmp : null;
 }
 
@@ -102,8 +50,8 @@ if ($exam1Id > 0 && $exam2Id > 0 && $exam1Id === $exam2Id) {
 $examById = [];
 foreach ($exams as $e) $examById[(int)$e['id']] = $e;
 
-$exam1Name = exam_name_only($exam1Id > 0 ? ($examById[$exam1Id] ?? null) : null, $exam1Id);
-$exam2Name = exam_name_only($exam2Id > 0 ? ($examById[$exam2Id] ?? null) : null, $exam2Id);
+$exam1Name = label_exam_name_only($exam1Id > 0 ? ($examById[$exam1Id] ?? null) : null, $exam1Id);
+$exam2Name = label_exam_name_only($exam2Id > 0 ? ($examById[$exam2Id] ?? null) : null, $exam2Id);
 
 /* -----------------------------
    Prepared statement (positional placeholders)
@@ -288,7 +236,7 @@ require __DIR__ . '/header.php';
     text-overflow: ellipsis;
     font-size: 1.00rem;
     text-align: left;
-    padding-left: 1.5rem; /* 👈 visual centering */
+    padding-left: 1.5rem; /* рџ‘€ visual centering */
   }
 
   /* Dense analytics padding */
@@ -407,7 +355,7 @@ require __DIR__ . '/header.php';
             <?php foreach ($exams as $e): ?>
               <?php $id = (int)$e['id']; ?>
               <option value="<?= $id ?>"<?= ($id === $exam1Id) ? ' selected' : '' ?>>
-                <?= h(exam_name_only($e, $id)) ?>
+                <?= h(label_exam_name_only($e, $id)) ?>
               </option>
             <?php endforeach; ?>
           </select>
@@ -420,7 +368,7 @@ require __DIR__ . '/header.php';
             <?php foreach ($exams as $e): ?>
               <?php $id = (int)$e['id']; ?>
               <option value="<?= $id ?>"<?= ($id === $exam2Id) ? ' selected' : '' ?>>
-                <?= h(exam_name_only($e, $id)) ?>
+                <?= h(label_exam_name_only($e, $id)) ?>
               </option>
             <?php endforeach; ?>
           </select>
@@ -440,7 +388,7 @@ require __DIR__ . '/header.php';
             <span class="badge text-bg-warning text-dark">&lt;66%</span>
             <span class="badge text-bg-primary">&lt;86%</span>
             <span class="badge text-bg-success">&ge;86%</span>
-            <span class="ms-2">Δ: ▲/▼/→</span>
+            <span class="ms-2">Delta: ▲/▼/→</span>
           </div>
         </div>
 
@@ -480,17 +428,17 @@ require __DIR__ . '/header.php';
           <div class="group-strip mb-3">
             <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
               <div class="fw-semibold">
-                <?= h($classCode) ?> · Group 1
+                <?= h($classCode) ?> · <span class="badge rounded-pill text-bg-info">Group 1</span>
                 <span class="text-muted small ms-2">(<?= (int)$g1Avgs['n'] ?> pupils)</span>
               </div>
 
               <div class="mini-kpi">
-                <span class="pill mono">Avg <?= h($exam1Name) ?>: <span class="fw-semibold"><?= h(fmt_score($g1Avgs['avg1'])) ?></span></span>
-                <span class="pill mono">Avg <?= h($exam2Name) ?>: <span class="fw-semibold"><?= h(fmt_score($g1Avgs['avg2'])) ?></span></span>
+                <span class="pill mono"><?= h($exam1Name) ?>: <span class="fw-semibold"><?= h(format_decimal_trimmed($g1Avgs['avg1'])) ?></span></span>
+                <span class="pill mono"><?= h($exam2Name) ?>: <span class="fw-semibold"><?= h(format_decimal_trimmed($g1Avgs['avg2'])) ?></span></span>
                 <span class="pill mono">
-                  Δ:
-                  <?= diff_icon($g1Avgs['avgd']) ?>
-                  <span class="fw-semibold"><?= h($g1Avgs['avgd'] === null ? '—' : (($g1Avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$g1Avgs['avgd']))) ?></span>
+                  Farq:
+                  <?= render_delta_direction_icon($g1Avgs['avgd']) ?>
+                  <span class="fw-semibold"><?= h($g1Avgs['avgd'] === null ? '—' : (($g1Avgs['avgd'] > 0 ? '+' : '') . format_decimal_trimmed((float)$g1Avgs['avgd']))) ?></span>
                 </span>
               </div>
             </div>
@@ -499,10 +447,10 @@ require __DIR__ . '/header.php';
               <table class="table table-sm table-hover align-middle mb-0 sticky-head compare-table">
                 <thead>
                   <tr>
-                    <th class="name-col">Pupil</th>
+                    <th class="name-col">O'quvchi</th>
                     <th class="score-col"><?= h($exam1Name) ?></th>
                     <th class="score-col"><?= h($exam2Name) ?></th>
-                    <th class="diff-col">Δ</th>
+                    <th class="diff-col">Farq</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -522,22 +470,22 @@ require __DIR__ . '/header.php';
                         </td>
 
                         <td class="mono score-cell">
-                          <span class="badge score-pill <?= h_attr(score_badge_class($s1, $maxPoints)) ?> mono">
-                            <?= h(fmt_score($s1)) ?>
+                          <span class="badge score-pill <?= h_attr(badge_score_by_percent_of_max($s1, $maxPoints)) ?> mono">
+                            <?= h(format_decimal_trimmed($s1)) ?>
                           </span>
                         </td>
 
                         <td class="mono score-cell">
-                          <span class="badge score-pill <?= h_attr(score_badge_class($s2, $maxPoints)) ?> mono">
-                            <?= h(fmt_score($s2)) ?>
+                          <span class="badge score-pill <?= h_attr(badge_score_by_percent_of_max($s2, $maxPoints)) ?> mono">
+                            <?= h(format_decimal_trimmed($s2)) ?>
                           </span>
                         </td>
 
                         <td class="mono diff-cell">
                           <span class="diff-wrap">
-                            <?= diff_icon($diff) ?>
-                            <span class="badge diff-pill <?= h_attr(diff_badge_class($diff)) ?> mono">
-                              <?= $diff === null ? '—' : h(($diff > 0 ? '+' : '') . fmt_score($diff)) ?>
+                            <?= render_delta_direction_icon($diff) ?>
+                            <span class="badge diff-pill <?= h_attr(badge_delta_change_class($diff)) ?> mono">
+                              <?= $diff === null ? '—' : h(($diff > 0 ? '+' : '') . format_decimal_trimmed($diff)) ?>
                             </span>
                           </span>
                         </td>
@@ -546,13 +494,13 @@ require __DIR__ . '/header.php';
 
                     <tr class="table-light">
                       <td class="fw-semibold">Average</td>
-                      <td class="mono fw-semibold score-cell"><?= h(fmt_score($g1Avgs['avg1'])) ?></td>
-                      <td class="mono fw-semibold score-cell"><?= h(fmt_score($g1Avgs['avg2'])) ?></td>
+                      <td class="mono fw-semibold score-cell"><?= h(format_decimal_trimmed($g1Avgs['avg1'])) ?></td>
+                      <td class="mono fw-semibold score-cell"><?= h(format_decimal_trimmed($g1Avgs['avg2'])) ?></td>
                       <td class="mono fw-semibold diff-cell">
                         <span class="diff-wrap">
-                          <?= diff_icon($g1Avgs['avgd']) ?>
-                          <span class="badge diff-pill <?= h_attr(diff_badge_class($g1Avgs['avgd'])) ?> mono">
-                            <?= $g1Avgs['avgd'] === null ? '—' : h(($g1Avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$g1Avgs['avgd'])) ?>
+                          <?= render_delta_direction_icon($g1Avgs['avgd']) ?>
+                          <span class="badge diff-pill <?= h_attr(badge_delta_change_class($g1Avgs['avgd'])) ?> mono">
+                            <?= $g1Avgs['avgd'] === null ? '—' : h(($g1Avgs['avgd'] > 0 ? '+' : '') . format_decimal_trimmed((float)$g1Avgs['avgd'])) ?>
                           </span>
                         </span>
                       </td>
@@ -567,17 +515,17 @@ require __DIR__ . '/header.php';
           <div class="group-strip">
             <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
               <div class="fw-semibold">
-                <?= h($classCode) ?> · Group 2
+                <?= h($classCode) ?> · <span class="badge rounded-pill text-bg-info">Group 2</span>
                 <span class="text-muted small ms-2">(<?= (int)$g2Avgs['n'] ?> pupils)</span>
               </div>
 
               <div class="mini-kpi">
-                <span class="pill mono">Avg <?= h($exam1Name) ?>: <span class="fw-semibold"><?= h(fmt_score($g2Avgs['avg1'])) ?></span></span>
-                <span class="pill mono">Avg <?= h($exam2Name) ?>: <span class="fw-semibold"><?= h(fmt_score($g2Avgs['avg2'])) ?></span></span>
+                <span class="pill mono"><?= h($exam1Name) ?>: <span class="fw-semibold"><?= h(format_decimal_trimmed($g2Avgs['avg1'])) ?></span></span>
+                <span class="pill mono"><?= h($exam2Name) ?>: <span class="fw-semibold"><?= h(format_decimal_trimmed($g2Avgs['avg2'])) ?></span></span>
                 <span class="pill mono">
-                  Δ:
-                  <?= diff_icon($g2Avgs['avgd']) ?>
-                  <span class="fw-semibold"><?= h($g2Avgs['avgd'] === null ? '—' : (($g2Avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$g2Avgs['avgd']))) ?></span>
+                  Farq:
+                  <?= render_delta_direction_icon($g2Avgs['avgd']) ?>
+                  <span class="fw-semibold"><?= h($g2Avgs['avgd'] === null ? '—' : (($g2Avgs['avgd'] > 0 ? '+' : '') . format_decimal_trimmed((float)$g2Avgs['avgd']))) ?></span>
                 </span>
               </div>
             </div>
@@ -586,10 +534,10 @@ require __DIR__ . '/header.php';
               <table class="table table-sm table-hover align-middle mb-0 sticky-head compare-table">
                 <thead>
                   <tr>
-                    <th class="name-col">Pupil</th>
+                    <th class="name-col">O'quvchi</th>
                     <th class="score-col"><?= h($exam1Name) ?></th>
                     <th class="score-col"><?= h($exam2Name) ?></th>
-                    <th class="diff-col">Δ</th>
+                    <th class="diff-col">Farq</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -609,22 +557,22 @@ require __DIR__ . '/header.php';
                         </td>
 
                         <td class="mono score-cell">
-                          <span class="badge score-pill <?= h_attr(score_badge_class($s1, $maxPoints)) ?> mono">
-                            <?= h(fmt_score($s1)) ?>
+                          <span class="badge score-pill <?= h_attr(badge_score_by_percent_of_max($s1, $maxPoints)) ?> mono">
+                            <?= h(format_decimal_trimmed($s1)) ?>
                           </span>
                         </td>
 
                         <td class="mono score-cell">
-                          <span class="badge score-pill <?= h_attr(score_badge_class($s2, $maxPoints)) ?> mono">
-                            <?= h(fmt_score($s2)) ?>
+                          <span class="badge score-pill <?= h_attr(badge_score_by_percent_of_max($s2, $maxPoints)) ?> mono">
+                            <?= h(format_decimal_trimmed($s2)) ?>
                           </span>
                         </td>
 
                         <td class="mono diff-cell">
                           <span class="diff-wrap">
-                            <?= diff_icon($diff) ?>
-                            <span class="badge diff-pill <?= h_attr(diff_badge_class($diff)) ?> mono">
-                              <?= $diff === null ? '—' : h(($diff > 0 ? '+' : '') . fmt_score($diff)) ?>
+                            <?= render_delta_direction_icon($diff) ?>
+                            <span class="badge diff-pill <?= h_attr(badge_delta_change_class($diff)) ?> mono">
+                              <?= $diff === null ? '—' : h(($diff > 0 ? '+' : '') . format_decimal_trimmed($diff)) ?>
                             </span>
                           </span>
                         </td>
@@ -633,13 +581,13 @@ require __DIR__ . '/header.php';
 
                     <tr class="table-light">
                       <td class="fw-semibold">Average</td>
-                      <td class="mono fw-semibold score-cell"><?= h(fmt_score($g2Avgs['avg1'])) ?></td>
-                      <td class="mono fw-semibold score-cell"><?= h(fmt_score($g2Avgs['avg2'])) ?></td>
+                      <td class="mono fw-semibold score-cell"><?= h(format_decimal_trimmed($g2Avgs['avg1'])) ?></td>
+                      <td class="mono fw-semibold score-cell"><?= h(format_decimal_trimmed($g2Avgs['avg2'])) ?></td>
                       <td class="mono fw-semibold diff-cell">
                         <span class="diff-wrap">
-                          <?= diff_icon($g2Avgs['avgd']) ?>
-                          <span class="badge diff-pill <?= h_attr(diff_badge_class($g2Avgs['avgd'])) ?> mono">
-                            <?= $g2Avgs['avgd'] === null ? '—' : h(($g2Avgs['avgd'] > 0 ? '+' : '') . fmt_score((float)$g2Avgs['avgd'])) ?>
+                          <?= render_delta_direction_icon($g2Avgs['avgd']) ?>
+                          <span class="badge diff-pill <?= h_attr(badge_delta_change_class($g2Avgs['avgd'])) ?> mono">
+                            <?= $g2Avgs['avgd'] === null ? '—' : h(($g2Avgs['avgd'] > 0 ? '+' : '') . format_decimal_trimmed((float)$g2Avgs['avgd'])) ?>
                           </span>
                         </span>
                       </td>
@@ -658,7 +606,7 @@ require __DIR__ . '/header.php';
   <?php endif; ?>
 
   <div class="text-muted small mt-3">
-    Δ = Exam 2 − Exam 1. ▲ increase, ▼ decrease, → no change. Missing scores show “—”.
+    Delta = Exam 2 - Exam 1. ▲ increase, ▼ decrease, → no change. Missing scores show "—".
   </div>
 
 </div>

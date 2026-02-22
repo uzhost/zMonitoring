@@ -3,9 +3,6 @@
 
 declare(strict_types=1);
 
-$page_title = 'Certificates';
-require __DIR__ . '/header.php';
-
 require_once __DIR__ . '/../inc/db.php';
 require_once __DIR__ . '/../inc/auth.php';
 
@@ -17,6 +14,12 @@ verify_csrf('csrf');
 const CERT_TYPES = ['xalqaro', 'milliy'];
 const CERT_STATUSES = ['active', 'expired', 'revoked'];
 const CERT_FILE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+
+function normalize_cert_type(string $v): string
+{
+    $v = mb_strtolower(trim($v), 'UTF-8');
+    return in_array($v, CERT_TYPES, true) ? $v : '';
+}
 
 function post_str(string $key, int $maxLen): string
 {
@@ -294,7 +297,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             $certSubjectId = $certSubjectId > 0 ? $certSubjectId : null;
             $subject = ($certSubjectId !== null && isset($subjectMap[$certSubjectId])) ? (string)$subjectMap[$certSubjectId] : '';
             $name = post_str('name', 120);
-            $type = post_str('type', 20);
+            $type = normalize_cert_type(post_str('type', 20));
             $serial = post_str('serial_number', 80);
             $level = post_str('level', 60);
             $level = $level === '' ? null : $level;
@@ -325,7 +328,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             if ($name === '' || $serial === '') {
                 throw new RuntimeException('Certificate name and serial number are required.');
             }
-            if (!in_array($type, CERT_TYPES, true)) {
+            if ($type === '') {
                 throw new RuntimeException('Type must be either `xalqaro` or `milliy`.');
             }
             if ($percentage === null || $percentage < 0.0 || $percentage > 100.0) {
@@ -611,13 +614,14 @@ $formData = [
 
 if ($editRow) {
     $editPupilId = (int)$editRow['pupil_id'];
+    $editType = normalize_cert_type((string)($editRow['type'] ?? ''));
     $formData = [
         'id' => (int)$editRow['id'],
         'class_code' => (string)($pupilClassById[$editPupilId] ?? ''),
         'pupil_id' => $editPupilId,
         'certificate_subject_id' => (int)($editRow['certificate_subject_id'] ?? 0),
         'name' => (string)$editRow['name'],
-        'type' => (string)$editRow['type'],
+        'type' => $editType !== '' ? $editType : 'xalqaro',
         'serial_number' => (string)$editRow['serial_number'],
         'level' => (string)($editRow['level'] ?? ''),
         'percentage' => number_format((float)$editRow['percentage'], 2, '.', ''),
@@ -628,6 +632,10 @@ if ($editRow) {
         'notes' => (string)($editRow['notes'] ?? ''),
     ];
 }
+
+$page_title = 'Certificates';
+$page_subtitle = 'Manage pupil certificates and subject OTM percentage mapping.';
+require __DIR__ . '/header.php';
 ?>
 
 <style nonce="<?= h($cspNonce ?? ($_SESSION['csp_nonce'] ?? '')) ?>">
@@ -727,8 +735,14 @@ if ($editRow) {
       <div class="col-6 col-md-4 col-lg-2">
         <label class="form-label">Type</label>
         <select class="form-select" name="type" required>
+          <?php
+            $typeCurrent = normalize_cert_type((string)($formData['type'] ?? ''));
+            if ($typeCurrent === '') $typeCurrent = 'xalqaro';
+          ?>
+          <option value="<?= h($typeCurrent) ?>" selected><?= h($typeCurrent) ?></option>
           <?php foreach (CERT_TYPES as $t): ?>
-            <option value="<?= h($t) ?>" <?= $t === (string)$formData['type'] ? 'selected' : '' ?>><?= h($t) ?></option>
+            <?php if ($t === $typeCurrent) continue; ?>
+            <option value="<?= h($t) ?>"><?= h($t) ?></option>
           <?php endforeach; ?>
         </select>
       </div>
@@ -903,8 +917,8 @@ if ($editRow) {
             <tr>
               <td class="text-muted"><?= $cid ?></td>
               <td>
-                <div class="fw-semibold"><?= h((string)$r['student_login']) ?></div>
-                <div class="small text-muted"><?= h($pupilName !== '' ? $pupilName : '-') ?><?php if (!empty($r['class_code'])): ?> | <?= h((string)$r['class_code']) ?><?php endif; ?></div>
+                <div class="fw-semibold"><?= h($pupilName !== '' ? $pupilName : (string)$r['student_login']) ?></div>
+                <div class="small text-muted"><?php if (!empty($r['class_code'])): ?><?= h((string)$r['class_code']) ?><?php else: ?>-<?php endif; ?></div>
               </td>
               <td>
                 <div class="fw-semibold"><?= h((string)$r['name']) ?></div>

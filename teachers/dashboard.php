@@ -1,42 +1,22 @@
 <?php
-// teacher/dashboard.php — Analytics-first dashboard (Teacher/Viewer portal)
+// teachers/dashboard.php - Analytics-first dashboard (Teacher/Viewer portal)
 // The "full reports" remain in reports.php; this page is a decision-friendly overview.
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../inc/db.php';
-require_once __DIR__ . '/../inc/auth.php';
+// Centralized teachers guard
+$tguard_allowed_methods = ['GET', 'HEAD'];
+$tguard_login_path = '/teachers/login.php';
+$tguard_fallback_path = '/teachers/dashboard.php';
+$tguard_require_active = true;
+require_once __DIR__ . '/_tguard.php';
 
-session_start_secure();
-
-$scriptName = (string)($_SERVER['SCRIPT_NAME'] ?? '/teacher/dashboard.php');
+$scriptName = (string)($_SERVER['SCRIPT_NAME'] ?? '/teachers/dashboard.php');
 $teacherBase = rtrim(str_replace('\\', '/', dirname($scriptName)), '/.');
-$teacherBase = ($teacherBase === '') ? '/teacher' : $teacherBase;
+$teacherBase = ($teacherBase === '') ? '/teachers' : $teacherBase;
 $dashboardUrl = $teacherBase . '/dashboard.php';
 $reportsBaseUrl = $teacherBase . '/reports.php';
-$loginUrl = $teacherBase . '/login.php';
 $pupilBaseUrl = $teacherBase . '/pupil.php';
-
-// -------------------- Access control --------------------
-if (admin_id() <= 0) {
-    $to = $_SERVER['REQUEST_URI'] ?? $dashboardUrl;
-    header('Location: ' . $loginUrl . '?next=' . rawurlencode($to));
-    exit;
-}
-
-if (function_exists('admin_level')) {
-    if ((int)admin_level() !== 3) {
-        http_response_code(403);
-        echo 'Forbidden.';
-        exit;
-    }
-} else {
-    if (!in_array((string)admin_role(), ['viewer'], true)) {
-        http_response_code(403);
-        echo 'Forbidden.';
-        exit;
-    }
-}
 
 // CSP nonce
 if (empty($_SESSION['csp_nonce']) || !is_string($_SESSION['csp_nonce'])) {
@@ -48,7 +28,6 @@ $cspNonce = $_SESSION['csp_nonce'];
 header('Content-Type: text/html; charset=UTF-8');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: strict-origin-when-cross-origin');
-header('X-Frame-Options: SAMEORIGIN');
 header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
 
 $pageTitle = 'Dashboard';
@@ -371,7 +350,7 @@ if ($effectiveExamId > 0 && $subjectId === 0) {
         ];
     }
 
-    // Movers (requires prev) — FIXED: sign-aware, no overlap
+    // Movers (requires prev)  FIXED: sign-aware, no overlap
     if ($prevExamId > 0) {
         $withDelta = array_values(array_filter($subjectRows, static fn($x) => $x['delta'] !== null));
 
@@ -572,6 +551,29 @@ $activeFilterCount = count($activeFilters);
 ?>
 
 <style nonce="<?= h($cspNonce) ?>">
+  .dashboard-shell .card{ border-radius:.9rem; }
+  .dashboard-shell .card-body{ padding:1rem 1.05rem; }
+  .dashboard-shell .form-label{
+    font-size:.78rem;
+    text-transform:uppercase;
+    letter-spacing:.03em;
+    color:#5f6b7a;
+    margin-bottom:.35rem;
+    font-weight:600;
+  }
+  .dashboard-shell .display-6{
+    font-size:2rem;
+    line-height:1.05;
+    font-weight:700;
+    letter-spacing:-.02em;
+    color:#0f172a;
+  }
+  .dashboard-shell .table thead th{
+    font-size:.78rem;
+    text-transform:uppercase;
+    letter-spacing:.03em;
+    color:#5c6675;
+  }
   /* Subject movers UI */
   .mover-row{ padding:.52rem .25rem; border-bottom:1px solid rgba(0,0,0,.08); }
   .mover-row:last-child{ border-bottom:0; }
@@ -584,7 +586,7 @@ $activeFilterCount = count($activeFilters);
   .filter-chip:hover{ background:rgba(13,110,253,.08); }
 </style>
 
-<div class="container-fluid py-3">
+<div class="container-fluid py-3 dashboard-shell">
 
   <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
     <div>
@@ -711,17 +713,17 @@ $activeFilterCount = count($activeFilters);
             <div>
               <div class="text-muted small">Average score</div>
               <div class="display-6 mb-0">
-                <?= ($kpiNow['avg_score'] === null) ? '—' : h(number_format((float)$kpiNow['avg_score'], 2)) ?>
+                <?= ($kpiNow['avg_score'] === null) ? '-' : h(number_format((float)$kpiNow['avg_score'], 2)) ?>
               </div>
             </div>
             <span class="badge text-bg-<?= h(badge_delta($deltaAvg)) ?>">
-              Δ <?= h(fmt_delta($deltaAvg, 2)) ?>
+              Delta <?= h(fmt_delta($deltaAvg, 2)) ?>
             </span>
           </div>
           <div class="text-muted small mt-2">
             Band:
             <?php if ($kpiNow['avg_score'] === null): ?>
-              —
+              -
             <?php else: ?>
               <span class="badge text-bg-<?= h(score_band((float)$kpiNow['avg_score'])) ?>">
                 <?= h(score_band((float)$kpiNow['avg_score'])) ?>
@@ -739,10 +741,10 @@ $activeFilterCount = count($activeFilters);
           <div class="d-flex justify-content-between align-items-start">
             <div>
               <div class="text-muted small">Median score</div>
-              <div class="display-6 mb-0"><?= ($medianNow === null) ? '—' : h(number_format((float)$medianNow, 2)) ?></div>
+              <div class="display-6 mb-0"><?= ($medianNow === null) ? '-' : h(number_format((float)$medianNow, 2)) ?></div>
             </div>
             <span class="badge text-bg-<?= h(badge_delta($deltaMedian)) ?>">
-              Δ <?= h(fmt_delta($deltaMedian, 2)) ?>
+              Delta <?= h(fmt_delta($deltaMedian, 2)) ?>
             </span>
           </div>
           <div class="text-muted small mt-2">
@@ -757,17 +759,17 @@ $activeFilterCount = count($activeFilters);
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start">
             <div>
-              <div class="text-muted small">Pass rate (≥ <?= h(number_format(PASS_SCORE, 0)) ?>)</div>
+              <div class="text-muted small">Pass rate (>= <?= h(number_format(PASS_SCORE, 0)) ?>)</div>
               <div class="display-6 mb-0">
-                <?= ($passRateNow === null) ? '—' : h(number_format($passRateNow * 100, 1)) . '%' ?>
+                <?= ($passRateNow === null) ? '-' : h(number_format($passRateNow * 100, 1)) . '%' ?>
               </div>
             </div>
             <span class="badge text-bg-<?= h(badge_delta($deltaPass)) ?>">
-              Δ <?= ($deltaPass === null) ? '—' : h(($deltaPass > 0 ? '+' : '') . number_format($deltaPass, 1)) ?> pp
+              Delta <?= ($deltaPass === null) ? '-' : h(($deltaPass > 0 ? '+' : '') . number_format($deltaPass, 1)) ?> pp
             </span>
           </div>
           <div class="text-muted small mt-2">
-            Targets: Pass <?= h((string)PASS_SCORE) ?> · Good <?= h((string)GOOD_SCORE) ?> · Excellent <?= h((string)EXCELLENT_SCORE) ?>
+            Targets: Pass <?= h((string)PASS_SCORE) ?> | Good <?= h((string)GOOD_SCORE) ?> | Excellent <?= h((string)EXCELLENT_SCORE) ?>
           </div>
         </div>
       </div>
@@ -780,7 +782,7 @@ $activeFilterCount = count($activeFilters);
           <div class="h5 mb-1"><?= ($classCode !== '') ? h($classCode) : 'All classes' ?></div>
           <div class="text-muted small">
             <?= ($track !== '') ? h($track) : 'All tracks' ?>
-            <?= ($subjectId > 0) ? ' · One subject' : ' · All subjects' ?>
+            <?= ($subjectId > 0) ? ' | One subject' : ' | All subjects' ?>
           </div>
           <div class="text-muted small mt-1">
             Active filters: <?= h((string)$activeFilterCount) ?>
@@ -806,14 +808,14 @@ $activeFilterCount = count($activeFilters);
               <div class="text-muted small">Best / worst change vs previous exam</div>
             </div>
             <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">
-              <i class="bi bi-arrows-move me-1"></i> Δ
+              <i class="bi bi-arrows-move me-1"></i> Delta
             </span>
           </div>
 
           <?php if (!$hasPrev || $subjectId !== 0 || $effectiveExamId <= 0): ?>
             <div class="text-muted small">
               <?= $subjectId !== 0 ? 'Movers are shown only when Subject = All.' : '' ?>
-              <?= !$hasPrev ? 'No previous exam in scope to compute Δ.' : '' ?>
+              <?= !$hasPrev ? 'No previous exam in scope to compute delta.' : '' ?>
               <?= $effectiveExamId <= 0 ? 'No exam data available.' : '' ?>
             </div>
           <?php else: ?>
@@ -843,8 +845,8 @@ $activeFilterCount = count($activeFilters);
                             <?= h($m['name']) ?>
                           </a>
                           <div class="mover-meta">
-                            Prev <?= h(number_format($prev, 2)) ?> → Now <?= h(number_format($now, 2)) ?>
-                            · n=<?= h((string)$m['n']) ?>
+                            Prev <?= h(number_format($prev, 2)) ?> -> Now <?= h(number_format($now, 2)) ?>
+                            | n=<?= h((string)$m['n']) ?>
                           </div>
                         </div>
                       </div>
@@ -879,8 +881,8 @@ $activeFilterCount = count($activeFilters);
                             <?= h($m['name']) ?>
                           </a>
                           <div class="mover-meta">
-                            Prev <?= h(number_format($prev, 2)) ?> → Now <?= h(number_format($now, 2)) ?>
-                            · n=<?= h((string)$m['n']) ?>
+                            Prev <?= h(number_format($prev, 2)) ?> -> Now <?= h(number_format($now, 2)) ?>
+                            | n=<?= h((string)$m['n']) ?>
                           </div>
                         </div>
                       </div>
@@ -902,7 +904,7 @@ $activeFilterCount = count($activeFilters);
           <div class="d-flex align-items-start justify-content-between mb-2">
             <div>
               <div class="fw-semibold">Score distribution</div>
-              <div class="text-muted small">Selected exam only (0–40 in 5-point bands)</div>
+              <div class="text-muted small">Selected exam only (0-40 in 5-point bands)</div>
             </div>
             <span class="badge text-bg-secondary-subtle border text-secondary-emphasis">
               <i class="bi bi-bar-chart me-1"></i> Histogram
@@ -913,7 +915,7 @@ $activeFilterCount = count($activeFilters);
             No score rows available for this distribution.
           </div>
           <div class="text-muted small mt-2">
-            Use this to detect “clumping” (too many low scores) or an “easy” paper (many 35+).
+            Use this to detect clumping (too many low scores) or an easy paper (many 35+).
           </div>
         </div>
       </div>
@@ -953,7 +955,7 @@ $activeFilterCount = count($activeFilters);
               <div class="fw-semibold">Subject overview (top 12)</div>
               <div class="text-muted small">
                 Avg score in the selected exam
-                <?php if ($hasPrev): ?> + Δ vs previous<?php endif; ?>
+                <?php if ($hasPrev): ?> + Delta vs previous<?php endif; ?>
               </div>
             </div>
             <a class="btn btn-outline-primary btn-sm" href="<?= h($fullReportsUrl) ?>">
@@ -974,7 +976,7 @@ $activeFilterCount = count($activeFilters);
                   <tr>
                     <th>Subject</th>
                     <th class="text-end">Avg</th>
-                    <th class="text-end d-none d-md-table-cell">Δ</th>
+                    <th class="text-end d-none d-md-table-cell">Delta</th>
                     <th class="text-end d-none d-lg-table-cell">n</th>
                     <th class="text-end"></th>
                   </tr>
@@ -1045,7 +1047,7 @@ $activeFilterCount = count($activeFilters);
                       <tr>
                         <th>Pupil</th>
                         <th class="text-end">Avg</th>
-                        <?php if ($hasPrev): ?><th class="text-end">Δ</th><?php endif; ?>
+                        <?php if ($hasPrev): ?><th class="text-end">Delta</th><?php endif; ?>
                         <th class="text-end"></th>
                       </tr>
                     </thead>
@@ -1060,10 +1062,10 @@ $activeFilterCount = count($activeFilters);
                         <tr>
                           <td class="text-truncate" style="max-width: 240px;">
                             <?= h((string)$r['short_name']) ?>
-                            <span class="text-muted small">· <?= h((string)$r['class_code']) ?></span>
+                            <span class="text-muted small">| <?= h((string)$r['class_code']) ?></span>
                           </td>
                           <td class="text-end">
-                            <?= ($avgNow === null) ? '—' : '<span class="badge text-bg-' . h($band) . '">' . h(number_format($avgNow, 2)) . '</span>' ?>
+                            <?= ($avgNow === null) ? '-' : '<span class="badge text-bg-' . h($band) . '">' . h(number_format($avgNow, 2)) . '</span>' ?>
                           </td>
                           <?php if ($hasPrev): ?>
                             <td class="text-end">
@@ -1104,7 +1106,7 @@ $activeFilterCount = count($activeFilters);
                         <div class="list-group-item d-flex justify-content-between align-items-center px-0">
                           <div class="text-truncate" style="max-width: 220px;">
                             <?= h((string)$p['short_name']) ?>
-                            <span class="text-muted small">· <?= h((string)$p['class_code']) ?></span>
+                            <span class="text-muted small">| <?= h((string)$p['class_code']) ?></span>
                           </div>
                           <span class="badge text-bg-<?= h(score_band($avg)) ?>"><?= h(number_format($avg, 2)) ?></span>
                         </div>
@@ -1124,7 +1126,7 @@ $activeFilterCount = count($activeFilters);
                         <div class="list-group-item d-flex justify-content-between align-items-center px-0">
                           <div class="text-truncate" style="max-width: 220px;">
                             <?= h((string)$p['short_name']) ?>
-                            <span class="text-muted small">· <?= h((string)$p['class_code']) ?></span>
+                            <span class="text-muted small">| <?= h((string)$p['class_code']) ?></span>
                           </div>
                           <span class="badge text-bg-<?= h(score_band($avg)) ?>"><?= h(number_format($avg, 2)) ?></span>
                         </div>
@@ -1293,3 +1295,4 @@ $activeFilterCount = count($activeFilters);
 </script>
 
 <?php require_once __DIR__ . '/footer.php'; ?>
+

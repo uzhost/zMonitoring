@@ -9,6 +9,9 @@ $tguard_allowed_methods = ['GET', 'HEAD'];
 $tguard_allowed_levels = [1, 2, 3];
 $tguard_login_path = '/teachers/login.php';
 $tguard_fallback_path = '/teachers/pupil.php';
+$tguard_enforce_read_scope = true;
+$tguard_target_pupil_id = (isset($_GET['id']) && preg_match('/^\d+$/', (string)$_GET['id'])) ? (int)$_GET['id'] : null;
+$tguard_target_student_login = isset($_GET['student_login']) ? trim((string)$_GET['student_login']) : null;
 $tguard_require_active = true;
 require_once __DIR__ . '/_tguard.php';
 

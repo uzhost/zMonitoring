@@ -144,6 +144,22 @@ if (!function_exists('badge_score_by_threshold')) {
     }
 }
 
+if (!function_exists('label_score_band_by_threshold')) {
+    function label_score_band_by_threshold(
+        ?float $avg,
+        float $pass,
+        float $good,
+        float $excellent
+    ): string
+    {
+        if ($avg === null) return 'No data';
+        if ($avg >= $excellent) return 'Excellent';
+        if ($avg >= $good) return 'Good';
+        if ($avg >= $pass) return 'Pass';
+        return 'Needs support';
+    }
+}
+
 if (!function_exists('resolve_class_grade')) {
     function resolve_class_grade(PDO $pdo, string $classCode): ?string
     {
@@ -242,6 +258,30 @@ if (!function_exists('label_exam_name_only')) {
         if (!$exam) return $fallbackId > 0 ? ('Exam #' . $fallbackId) : '—';
         $name = trim((string)($exam['exam_name'] ?? ''));
         return $name !== '' ? $name : ('Exam #' . (int)($exam['id'] ?? $fallbackId));
+    }
+}
+
+if (!function_exists('label_exam_full')) {
+    function label_exam_full(?array $exam, int $fallbackId = 0): string
+    {
+        if (!$exam) return $fallbackId > 0 ? ('Exam #' . $fallbackId) : '—';
+        $ay = trim((string)($exam['academic_year'] ?? ''));
+        $termValue = $exam['term'] ?? null;
+        $term = ($termValue === null || $termValue === '') ? '-' : (string)$termValue;
+        $name = trim((string)($exam['exam_name'] ?? ''));
+        $date = trim((string)($exam['exam_date'] ?? ''));
+        $base = trim(($ay !== '' ? ($ay . ' T' . $term . ' - ') : '') . ($name !== '' ? $name : ('Exam #' . (int)($exam['id'] ?? $fallbackId))));
+        return $date !== '' ? ($base . ' (' . $date . ')') : $base;
+    }
+}
+
+if (!function_exists('format_signed_decimal')) {
+    function format_signed_decimal(?float $value, int $precision = 2): string
+    {
+        if ($value === null) return '-';
+        if ($precision < 0) $precision = 0;
+        $sign = $value > 0 ? '+' : '';
+        return $sign . number_format($value, $precision, '.', '');
     }
 }
 

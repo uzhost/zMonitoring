@@ -5,11 +5,13 @@
 declare(strict_types=1);
 
 // Centralized teachers guard
+$tguard_enforce_read_scope = true;
 $tguard_allowed_methods = ['GET', 'HEAD'];
 $tguard_login_path = '/teachers/login.php';
 $tguard_fallback_path = '/teachers/dashboard.php';
 $tguard_require_active = true;
 require_once __DIR__ . '/_tguard.php';
+require_once __DIR__ . '/../inc/functions.php';
 
 $scriptName = (string)($_SERVER['SCRIPT_NAME'] ?? '/teachers/dashboard.php');
 $teacherBase = rtrim(str_replace('\\', '/', dirname($scriptName)), '/.');
@@ -55,36 +57,6 @@ function get_query_string(string $key, int $maxLen = 40): string {
 
 function get_query_int(string $key): int {
     return (int)($_GET[$key] ?? 0);
-}
-
-function exam_label(array $exam): string {
-    $ay = (string)($exam['academic_year'] ?? '');
-    $termValue = $exam['term'] ?? null;
-    $t = ($termValue === null || $termValue === '') ? '-' : (string)$termValue;
-    $nm = (string)($exam['exam_name'] ?? '');
-    $d = (string)($exam['exam_date'] ?? '');
-    return trim($ay . ' T' . $t . ' - ' . $nm . ($d !== '' ? ' (' . $d . ')' : ''));
-}
-
-function score_band(float $s): string {
-    if ($s < PASS_SCORE) return 'danger';       // Needs support
-    if ($s < GOOD_SCORE) return 'warning';      // Pass
-    if ($s < EXCELLENT_SCORE) return 'primary'; // Good
-    return 'success';                           // Excellent
-}
-
-function fmt_delta(?float $d, int $dec = 2): string {
-    if ($d === null) return '-';
-    $sign = ($d > 0) ? '+' : '';
-    return $sign . number_format($d, $dec);
-}
-
-
-function badge_delta(?float $d): string {
-    if ($d === null) return 'secondary';
-    if ($d > 0.00001) return 'success';
-    if ($d < -0.00001) return 'danger';
-    return 'secondary';
 }
 
 // -------------------- Filters --------------------
@@ -149,7 +121,7 @@ $prevLabel = null;
 if ($effectiveExamId > 0) {
     foreach ($exams as $e) {
         if ((int)$e['id'] === $effectiveExamId) {
-            $examLabel = exam_label($e);
+            $examLabel = label_exam_full($e);
             break;
         }
     }
@@ -158,7 +130,7 @@ if ($effectiveExamId > 0) {
 if ($prevExamId > 0) {
     foreach ($exams as $e) {
         if ((int)$e['id'] === $prevExamId) {
-            $prevLabel = exam_label($e);
+            $prevLabel = label_exam_full($e);
             break;
         }
     }
@@ -224,14 +196,6 @@ if ($prevExamId > 0) {
 }
 
 // Median
-$medianOf = static function (array $scores): ?float {
-    $n = count($scores);
-    if ($n === 0) return null;
-    sort($scores, SORT_NUMERIC);
-    $mid = intdiv($n, 2);
-    return ($n % 2 === 1) ? (float)$scores[$mid] : ((($scores[$mid - 1] + $scores[$mid]) / 2.0));
-};
-
 $scoresNowStmt = $pdo->prepare("
   SELECT r.score
   FROM results r
@@ -242,7 +206,7 @@ $scoresNowStmt = $pdo->prepare("
 $scoresNowStmt->execute($paramsNow);
 $scoresNow = [];
 while ($row = $scoresNowStmt->fetch()) $scoresNow[] = (float)$row['score'];
-$medianNow = $medianOf($scoresNow);
+$medianNow = stats_median($scoresNow);
 
 $medianPrev = null;
 if ($prevExamId > 0) {
@@ -256,7 +220,7 @@ if ($prevExamId > 0) {
     $scoresPrevStmt->execute($paramsPrev);
     $scoresPrev = [];
     while ($row = $scoresPrevStmt->fetch()) $scoresPrev[] = (float)$row['score'];
-    $medianPrev = $medianOf($scoresPrev);
+    $medianPrev = stats_median($scoresPrev);
 }
 
 // Pass rate
@@ -367,37 +331,6 @@ if ($effectiveExamId > 0 && $subjectId === 0) {
     // Compact table on dashboard (top 12 by now avg)
     usort($subjectRows, static fn($a, $b) => $b['avg_now'] <=> $a['avg_now']);
     $subjectRows = array_slice($subjectRows, 0, 12);
-}
-
-// -------------------- Top/Bottom pupils --------------------
-$topPupils = [];
-$bottomPupils = [];
-
-if ($effectiveExamId > 0) {
-    $pupilAggSql = "
-      SELECT
-        p.id,
-        p.class_code,
-        p.track,
-        CONCAT(p.surname, ' ', p.name) AS short_name,
-        SUM(r.score) AS total_score,
-        AVG(r.score) AS avg_score,
-        COUNT(*) AS n_subjects
-      FROM results r
-      JOIN pupils p ON p.id = r.pupil_id
-      JOIN exams  e ON e.id = r.exam_id
-      WHERE $whereNowSql
-      GROUP BY p.id, p.class_code, p.track, short_name
-      HAVING COUNT(*) > 0
-    ";
-
-    $st = $pdo->prepare($pupilAggSql . " ORDER BY total_score DESC, avg_score DESC LIMIT 8");
-    $st->execute($paramsNow);
-    $topPupils = $st->fetchAll();
-
-    $sb = $pdo->prepare($pupilAggSql . " ORDER BY total_score ASC, avg_score ASC LIMIT 8");
-    $sb->execute($paramsNow);
-    $bottomPupils = $sb->fetchAll();
 }
 
 // -------------------- At-risk snapshot (now vs prev) --------------------
@@ -641,7 +574,7 @@ $activeFilterCount = count($activeFilters);
             <?php foreach ($exams as $e): ?>
               <?php
                 $id = (int)$e['id'];
-                $label = exam_label($e);
+                $label = label_exam_full($e);
               ?>
               <option value="<?= $id ?>" <?= ($id === $examIdIn) ? 'selected' : '' ?>><?= h($label) ?></option>
             <?php endforeach; ?>
@@ -716,8 +649,8 @@ $activeFilterCount = count($activeFilters);
                 <?= ($kpiNow['avg_score'] === null) ? '-' : h(number_format((float)$kpiNow['avg_score'], 2)) ?>
               </div>
             </div>
-            <span class="badge text-bg-<?= h(badge_delta($deltaAvg)) ?>">
-              Delta <?= h(fmt_delta($deltaAvg, 2)) ?>
+            <span class="badge <?= h(badge_delta($deltaAvg)['cls']) ?>">
+              Delta <?= h(format_signed_decimal($deltaAvg, 2)) ?>
             </span>
           </div>
           <div class="text-muted small mt-2">
@@ -725,8 +658,8 @@ $activeFilterCount = count($activeFilters);
             <?php if ($kpiNow['avg_score'] === null): ?>
               -
             <?php else: ?>
-              <span class="badge text-bg-<?= h(score_band((float)$kpiNow['avg_score'])) ?>">
-                <?= h(score_band((float)$kpiNow['avg_score'])) ?>
+              <span class="badge <?= h(badge_score_by_threshold((float)$kpiNow['avg_score'], PASS_SCORE, GOOD_SCORE, EXCELLENT_SCORE)) ?>">
+                <?= h(label_score_band_by_threshold((float)$kpiNow['avg_score'], PASS_SCORE, GOOD_SCORE, EXCELLENT_SCORE)) ?>
               </span>
             <?php endif; ?>
           </div>
@@ -743,8 +676,8 @@ $activeFilterCount = count($activeFilters);
               <div class="text-muted small">Median score</div>
               <div class="display-6 mb-0"><?= ($medianNow === null) ? '-' : h(number_format((float)$medianNow, 2)) ?></div>
             </div>
-            <span class="badge text-bg-<?= h(badge_delta($deltaMedian)) ?>">
-              Delta <?= h(fmt_delta($deltaMedian, 2)) ?>
+            <span class="badge <?= h(badge_delta($deltaMedian)['cls']) ?>">
+              Delta <?= h(format_signed_decimal($deltaMedian, 2)) ?>
             </span>
           </div>
           <div class="text-muted small mt-2">
@@ -764,8 +697,8 @@ $activeFilterCount = count($activeFilters);
                 <?= ($passRateNow === null) ? '-' : h(number_format($passRateNow * 100, 1)) . '%' ?>
               </div>
             </div>
-            <span class="badge text-bg-<?= h(badge_delta($deltaPass)) ?>">
-              Delta <?= ($deltaPass === null) ? '-' : h(($deltaPass > 0 ? '+' : '') . number_format($deltaPass, 1)) ?> pp
+            <span class="badge <?= h(badge_delta($deltaPass)['cls']) ?>">
+              Delta <?= h(format_signed_decimal($deltaPass, 1)) ?> pp
             </span>
           </div>
           <div class="text-muted small mt-2">
@@ -850,7 +783,7 @@ $activeFilterCount = count($activeFilters);
                           </div>
                         </div>
                       </div>
-                      <span class="badge text-bg-success"><?= h(fmt_delta($d, 2)) ?></span>
+                      <span class="badge text-bg-success"><?= h(format_signed_decimal($d, 2)) ?></span>
                     </div>
                   <?php endforeach; ?>
                 <?php endif; ?>
@@ -886,7 +819,7 @@ $activeFilterCount = count($activeFilters);
                           </div>
                         </div>
                       </div>
-                      <span class="badge text-bg-danger"><?= h(fmt_delta($d, 2)) ?></span>
+                      <span class="badge text-bg-danger"><?= h(format_signed_decimal($d, 2)) ?></span>
                     </div>
                   <?php endforeach; ?>
                 <?php endif; ?>
@@ -986,18 +919,18 @@ $activeFilterCount = count($activeFilters);
                     <?php
                       $avg = (float)$r['avg_now'];
                       $delta = $r['delta'];
-                      $band = score_band($avg);
+                      $bandClass = badge_score_by_threshold($avg, PASS_SCORE, GOOD_SCORE, EXCELLENT_SCORE);
                     ?>
                     <tr>
                       <td class="text-truncate" style="max-width: 260px;">
                         <?= h($r['name']) ?>
                       </td>
                       <td class="text-end">
-                        <span class="badge text-bg-<?= h($band) ?>"><?= h(number_format($avg, 2)) ?></span>
+                        <span class="badge <?= h($bandClass) ?>"><?= h(number_format($avg, 2)) ?></span>
                       </td>
                       <td class="text-end d-none d-md-table-cell">
-                        <span class="badge text-bg-<?= h(badge_delta($delta)) ?>">
-                          <?= h(fmt_delta($delta, 2)) ?>
+                        <span class="badge <?= h(badge_delta($delta)['cls']) ?>">
+                          <?= h(format_signed_decimal($delta, 2)) ?>
                         </span>
                       </td>
                       <td class="text-end d-none d-lg-table-cell"><?= h((string)$r['n']) ?></td>
@@ -1057,7 +990,9 @@ $activeFilterCount = count($activeFilters);
                           $avgNow = isset($r['avg_now']) ? (float)$r['avg_now'] : null;
                           $avgPrev = isset($r['avg_prev']) ? (float)$r['avg_prev'] : null;
                           $d = ($hasPrev && $avgNow !== null && $avgPrev !== null) ? ($avgNow - $avgPrev) : null;
-                          $band = ($avgNow === null) ? 'secondary' : score_band($avgNow);
+                          $bandClass = ($avgNow === null)
+                              ? 'text-bg-secondary'
+                              : badge_score_by_threshold($avgNow, PASS_SCORE, GOOD_SCORE, EXCELLENT_SCORE);
                         ?>
                         <tr>
                           <td class="text-truncate" style="max-width: 240px;">
@@ -1065,11 +1000,11 @@ $activeFilterCount = count($activeFilters);
                             <span class="text-muted small">| <?= h((string)$r['class_code']) ?></span>
                           </td>
                           <td class="text-end">
-                            <?= ($avgNow === null) ? '-' : '<span class="badge text-bg-' . h($band) . '">' . h(number_format($avgNow, 2)) . '</span>' ?>
+                            <?= ($avgNow === null) ? '-' : '<span class="badge ' . h($bandClass) . '">' . h(number_format($avgNow, 2)) . '</span>' ?>
                           </td>
                           <?php if ($hasPrev): ?>
                             <td class="text-end">
-                              <span class="badge text-bg-<?= h(badge_delta($d)) ?>"><?= h(fmt_delta($d, 2)) ?></span>
+                              <span class="badge <?= h(badge_delta($d)['cls']) ?>"><?= h(format_signed_decimal($d, 2)) ?></span>
                             </td>
                           <?php endif; ?>
                           <td class="text-end">
@@ -1087,58 +1022,6 @@ $activeFilterCount = count($activeFilters);
                 </div>
               <?php endif; ?>
 
-            </div>
-          </div>
-        </div>
-
-        <div class="col-12">
-          <div class="card shadow-sm border-0">
-            <div class="card-body">
-              <div class="row g-3">
-                <div class="col-12 col-md-6">
-                  <div class="fw-semibold mb-2">Top performers</div>
-                  <?php if (!$topPupils): ?>
-                    <div class="text-muted">No data.</div>
-                  <?php else: ?>
-                    <div class="list-group list-group-flush">
-                      <?php foreach ($topPupils as $p): ?>
-                        <?php $avg = (float)$p['avg_score']; ?>
-                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                          <div class="text-truncate" style="max-width: 220px;">
-                            <?= h((string)$p['short_name']) ?>
-                            <span class="text-muted small">| <?= h((string)$p['class_code']) ?></span>
-                          </div>
-                          <span class="badge text-bg-<?= h(score_band($avg)) ?>"><?= h(number_format($avg, 2)) ?></span>
-                        </div>
-                      <?php endforeach; ?>
-                    </div>
-                  <?php endif; ?>
-                </div>
-
-                <div class="col-12 col-md-6">
-                  <div class="fw-semibold mb-2">Lowest performers</div>
-                  <?php if (!$bottomPupils): ?>
-                    <div class="text-muted">No data.</div>
-                  <?php else: ?>
-                    <div class="list-group list-group-flush">
-                      <?php foreach ($bottomPupils as $p): ?>
-                        <?php $avg = (float)$p['avg_score']; ?>
-                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                          <div class="text-truncate" style="max-width: 220px;">
-                            <?= h((string)$p['short_name']) ?>
-                            <span class="text-muted small">| <?= h((string)$p['class_code']) ?></span>
-                          </div>
-                          <span class="badge text-bg-<?= h(score_band($avg)) ?>"><?= h(number_format($avg, 2)) ?></span>
-                        </div>
-                      <?php endforeach; ?>
-                    </div>
-                  <?php endif; ?>
-                </div>
-
-              </div>
-              <div class="text-muted small mt-2">
-                Note: Rankings are based on average score in the selected exam scope (not overall historical).
-              </div>
             </div>
           </div>
         </div>
@@ -1295,4 +1178,3 @@ $activeFilterCount = count($activeFilters);
 </script>
 
 <?php require_once __DIR__ . '/footer.php'; ?>
-

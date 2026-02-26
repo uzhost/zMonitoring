@@ -1,5 +1,5 @@
 <?php
-// admin/dashboard.php — Dashboard (export-before-HTML; DECIMAL scores; HY093-safe; UI enhanced)
+// admin/dashboard.php — Dashboard (DROP-IN; export-before-HTML; DECIMAL scores; HY093-safe; UI enhanced)
 
 declare(strict_types=1);
 
@@ -48,6 +48,11 @@ function gdate(string $key): ?string {
     [$y,$m,$d] = array_map('intval', explode('-', $v));
     if (!checkdate($m, $d, $y)) return null;
     return $v;
+}
+
+function format_score(?float $value, int $decimals = 2): string
+{
+    return $value === null ? '—' : number_format($value, $decimals);
 }
 
 /**
@@ -138,6 +143,12 @@ $filters = [
     'date_from'     => gdate('date_from'),
     'date_to'       => gdate('date_to'),
 ];
+
+$notes = [];
+if ($filters['date_from'] && $filters['date_to'] && $filters['date_from'] > $filters['date_to']) {
+    [$filters['date_from'], $filters['date_to']] = [$filters['date_to'], $filters['date_from']];
+    $notes[] = 'Date range was reversed and has been normalized.';
+}
 
 /**
  * WHERE for result slice (aliases r,p,s,e)
@@ -435,23 +446,27 @@ $subjectDifficulty = $nRecords > 0 ? fetch_all($pdo, "
  * Trend (avg by exam)
  */
 $trend = $nRecords > 0 ? fetch_all($pdo, "
-    SELECT
-      e.id AS exam_id,
-      e.exam_name,
-      e.exam_date,
-      e.academic_year,
-      e.term,
-      AVG(r.score) AS avg_score,
-      COUNT(*) AS n
-    FROM results r
-    JOIN pupils p   ON p.id = r.pupil_id
-    JOIN subjects s ON s.id = r.subject_id
-    JOIN exams e    ON e.id = r.exam_id
-    $whereSql
-    GROUP BY e.id
-    HAVING COUNT(*) >= 5
-    ORDER BY COALESCE(e.exam_date,'9999-12-31') ASC, e.id ASC
-    LIMIT 12
+    SELECT *
+    FROM (
+      SELECT
+        e.id AS exam_id,
+        e.exam_name,
+        e.exam_date,
+        e.academic_year,
+        e.term,
+        AVG(r.score) AS avg_score,
+        COUNT(*) AS n
+      FROM results r
+      JOIN pupils p   ON p.id = r.pupil_id
+      JOIN subjects s ON s.id = r.subject_id
+      JOIN exams e    ON e.id = r.exam_id
+      $whereSql
+      GROUP BY e.id
+      HAVING COUNT(*) >= 5
+      ORDER BY COALESCE(e.exam_date,'9999-12-31') DESC, e.id DESC
+      LIMIT 12
+    ) recent_trend
+    ORDER BY COALESCE(exam_date,'9999-12-31') ASC, exam_id ASC
 ", $params) : [];
 
 /**
@@ -466,6 +481,9 @@ if ($filters['class_code'])    $chips[] = ['k'=>'class_code','t'=>'Class: ' . $f
 if ($filters['track'])         $chips[] = ['k'=>'track','t'=>'Track: ' . $filters['track']];
 if ($filters['date_from'])     $chips[] = ['k'=>'date_from','t'=>'From: ' . $filters['date_from']];
 if ($filters['date_to'])       $chips[] = ['k'=>'date_to','t'=>'To: ' . $filters['date_to']];
+if (abs($passThreshold - 24.0) > 0.00001)      $chips[] = ['k'=>'pass','t'=>'Pass ≥ ' . rtrim(rtrim(number_format($passThreshold, 1, '.', ''), '0'), '.')];
+if (abs($goodThreshold - 30.0) > 0.00001)      $chips[] = ['k'=>'good','t'=>'Good ≥ ' . rtrim(rtrim(number_format($goodThreshold, 1, '.', ''), '0'), '.')];
+if (abs($excellentThreshold - 35.0) > 0.00001) $chips[] = ['k'=>'excellent','t'=>'Excellent ≥ ' . rtrim(rtrim(number_format($excellentThreshold, 1, '.', ''), '0'), '.')];
 
 /**
  * Score bucket badge based on thresholds.
@@ -507,7 +525,7 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
             <a class="btn btn-sm btn-outline-primary" href="results_import.php">
               <i class="bi bi-upload me-1"></i>Import Results
             </a>
-            <a class="btn btn-sm btn-primary" href="<?= eh(url_with(['export' => 1])) ?>">
+            <a class="btn btn-sm btn-primary<?= $nRecords === 0 ? ' disabled' : '' ?>" href="<?= eh(url_with(['export' => 1])) ?>"<?= $nRecords === 0 ? ' aria-disabled="true" tabindex="-1"' : '' ?>>
               <i class="bi bi-download me-1"></i>Export CSV
             </a>
           </div>
@@ -540,7 +558,7 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
             <label class="form-label">Term</label>
             <select name="term" class="form-select">
               <option value="">All</option>
-              <?php for ($t=1; $t<=4; $t++): ?>
+              <?php for ($t=1; $t<=6; $t++): ?>
                 <option value="<?= $t ?>" <?= ($filters['term'] === $t) ? 'selected' : '' ?>><?= $t ?></option>
               <?php endfor; ?>
             </select>
@@ -648,6 +666,12 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
           </div>
         <?php endif; ?>
 
+        <?php foreach ($notes as $note): ?>
+          <div class="alert alert-warning mt-3 mb-0">
+            <i class="bi bi-exclamation-triangle me-1"></i><?= eh($note) ?>
+          </div>
+        <?php endforeach; ?>
+
       </div>
     </div>
   </div>
@@ -684,7 +708,7 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
               <?= ($kpi['avg_score'] !== null) ? number_format((float)$kpi['avg_score'], 2) : '—' ?>
             </div>
             <div class="small text-muted mono">
-              Min <?= eh($kpi['min_score'] ?? '—') ?> • Max <?= eh($kpi['max_score'] ?? '—') ?>
+              Min <?= format_score($kpi['min_score'] !== null ? (float)$kpi['min_score'] : null) ?> • Max <?= format_score($kpi['max_score'] !== null ? (float)$kpi['max_score'] : null) ?>
             </div>
           </div>
           <div class="text-muted fs-3 kpi-icon"><i class="bi bi-graph-up"></i></div>
@@ -701,7 +725,7 @@ function score_badge_class(int $bucket, float $pass, float $good, float $excelle
           <div>
             <div class="text-muted small">Median</div>
             <div class="fs-4 fw-semibold mono">
-              <?= !empty($median['median_score']) ? number_format((float)$median['median_score'], 2) : '—' ?>
+              <?= (($median['median_score'] ?? null) !== null) ? number_format((float)$median['median_score'], 2) : '—' ?>
             </div>
             <div class="small text-muted">Window-function based</div>
           </div>

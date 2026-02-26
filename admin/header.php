@@ -31,6 +31,9 @@ $active = static function (string $file) use ($current): string {
 $importPages = ['pupils_import.php', 'results_import.php', 'subjects.php'];
 $isImportActive = in_array($current, $importPages, true);
 
+$otmPages = ['otm_import.php', 'otm_results.php', 'otm_results_view.php', 'otm_cert_results.php', 'otm_major.php'];
+$isOtmActive = in_array($current, $otmPages, true);
+
 $weeklyPages = ['wm_subjects.php', 'wm_exams.php', 'wm_results.php', 'wm_reports.php'];
 $isWeeklyActive = in_array($current, $weeklyPages, true);
 
@@ -297,6 +300,47 @@ header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
           </ul>
         </li>
 
+
+        <!-- OTM dropdown -->
+        <li class="nav-item dropdown">
+          <a
+            class="nav-link dropdown-toggle<?= $isOtmActive ? ' active' : '' ?>"
+            href="#"
+            role="button"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+            aria-current="<?= $isOtmActive ? 'page' : 'false' ?>"
+          >
+            <i class="bi bi-mortarboard me-1"></i> OTM
+          </a>
+          <ul class="dropdown-menu dropdown-menu-dark shadow-sm">
+            <li>
+              <a class="dropdown-item<?= $active('otm_import.php') ?>" href="otm_import.php">
+                <i class="bi bi-file-earmark-spreadsheet me-2"></i> OTM import
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('otm_results.php') ?>" href="otm_results.php">
+                <i class="bi bi-clipboard-data me-2"></i> OTM results
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('otm_results_view.php') ?>" href="otm_results_view.php">
+                <i class="bi bi-table me-2"></i> OTM results view
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('otm_cert_results.php') ?>" href="otm_cert_results.php">
+                <i class="bi bi-calculator me-2"></i> OTM cert results
+              </a>
+            </li>
+            <li>
+              <a class="dropdown-item<?= $active('otm_major.php') ?>" href="otm_major.php">
+                <i class="bi bi-diagram-3 me-2"></i> OTM majors
+              </a>
+            </li>
+          </ul>
+        </li>
         <!-- Class dropdown (dark + consistent) -->
         <li class="nav-item dropdown">
           <a

@@ -1,6 +1,6 @@
 <?php
 // teachers/logout.php - Teacher logout (CSRF protected, safe redirects)
-// Drop-in fix: GET shows confirmation; POST performs logout; optional tokenized GET supported.
+// POST performs logout; GET/HEAD only shows confirmation.
 
 declare(strict_types=1);
 
@@ -67,27 +67,9 @@ if ($method === 'POST') {
     exit;
 }
 
-// GET/HEAD: optionally accept tokenized GET, otherwise show confirmation form
+// GET/HEAD: show confirmation form (no state change on GET)
 if ($method === 'GET' || $method === 'HEAD') {
-    // Accept multiple param names to avoid brittle link mismatches
-    $csrf = (string)($_GET['csrf'] ?? $_GET['token'] ?? $_GET['csrf_token'] ?? '');
-
-    $sess = (string)($_SESSION['csrf_token'] ?? '');
-
-    // If a valid token is present, allow one-click logout (still CSRF-protected)
-    if ($csrf !== '' && $sess !== '' && hash_equals($sess, $csrf)) {
-        teacher_logout_session();
-
-        if (!isset($_SESSION['csrf_token']) || !is_string($_SESSION['csrf_token']) || $_SESSION['csrf_token'] === '') {
-            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-        }
-
-        header('Location: ' . $next);
-        exit;
-    }
-
-    // Otherwise: show a confirmation page that logs out via POST (best practice).
-    // This avoids "Invalid logout request" when the token mismatches or is missing.
+    // Show a confirmation page that logs out via POST (best practice).
     $token = csrf_token(); // your helper should generate/reuse session token
 
     header('Content-Type: text/html; charset=utf-8');
